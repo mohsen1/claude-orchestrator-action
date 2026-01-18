@@ -155,6 +155,8 @@ async function openPullRequest({
   const context = github.context;
   const headBranch = branchName || context.ref?.replace('refs/heads/', '') || 'main';
 
+  console.log(`Creating PR: ${headBranch} -> ${parentBranch}`);
+
   const payload = {
     owner: context.repo.owner,
     repo: context.repo.repo,
@@ -166,10 +168,21 @@ async function openPullRequest({
 
   if (process.env.NODE_ENV === 'test' && (global as any).__TEST_STATE) {
     (global as any).__TEST_STATE.prs.push(payload);
+    console.log(`[TEST] Would create PR: ${JSON.stringify(payload)}`);
+    return;
   }
 
   if (octokit?.rest?.pulls?.create) {
-    await octokit.rest.pulls.create(payload);
+    try {
+      const pr = await octokit.rest.pulls.create(payload);
+      console.log(`PR created: ${pr.data.html_url}`);
+    } catch (error: any) {
+      console.error(`Failed to create PR: ${error.message}`);
+      if (error.status) {
+        console.error(`Status: ${error.status}`);
+      }
+      throw error;
+    }
   }
 }
 
