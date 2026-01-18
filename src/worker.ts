@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
+import * as exec from '@actions/exec';
 import fs from 'fs-extra';
 import path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
@@ -61,6 +62,9 @@ console.log('placeholder');`;
   }
   await writeFilesFromResponse(files, responseText);
 
+  // Commit the files to git
+  await commitFiles(branchName, goal);
+
   await openPullRequest({
     goal,
     parentBranch,
@@ -81,6 +85,44 @@ async function writeFilesFromResponse(files: string[], responseText: string) {
     await fs.ensureDir(path.dirname(targetPath));
     await fs.writeFile(targetPath, content.trim() + '\n');
     console.log(`Wrote file ${targetPath}`);
+  }
+}
+
+async function commitFiles(branchName: string, goal: string) {
+  try {
+    // Configure git
+    await exec.exec('git', ['config', 'user.name', 'github-actions[bot]']);
+    await exec.exec('git', ['config', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
+
+    // Check if there are any changes to commit
+    let statusOutput = '';
+    await exec.exec('git', ['status', '--porcelain'], {
+      listeners: {
+        stdout: (data: Buffer) => {
+          statusOutput += data.toString();
+        },
+      },
+    });
+
+    if (!statusOutput.trim()) {
+      console.log('No changes to commit');
+      return;
+    }
+
+    // Add all changes
+    await exec.exec('git', ['add', '-A']);
+
+    // Commit with the goal as the message
+    const commitMessage = `AI: ${goal}`;
+    await exec.exec('git', ['commit', '-m', commitMessage]);
+
+    // Push the branch
+    await exec.exec('git', ['push', '-u', 'origin', branchName]);
+
+    console.log(`Committed and pushed changes to ${branchName}`);
+  } catch (error) {
+    console.error(`Error committing files: ${error}`);
+    throw error;
   }
 }
 
