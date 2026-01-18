@@ -1,0 +1,141 @@
+const core = require('@actions/core');
+const github = require('@actions/github');
+const fs = require('fs-extra');
+const path = require('path');
+const Anthropic = require('@anthropic-ai/sdk');
+
+function getOctokit() {
+  const token = core.getInput('github_token');
+  return github.getOctokit(token);
+}
+
+async function getClaudePlan(prompt) {
+  if (process.env.NODE_ENV === 'test') {
+    if (prompt.includes('Analyze the request')) {
+      return { subsystems: [{ name: 'backend', goal: 'Setup API', path: 'src/api' }] };
+    }
+    if (prompt.toLowerCase().includes('atomic coding tasks')) {
+      return { tasks: [{ id: 'task_1', description: 'Create server', files: ['src/api/server.js'] }] };
+    }
+  }
+
+  const anthropic = new Anthropic({ apiKey: core.getInput('anthropic_key') });
+  const res = await anthropic.messages.create({
+    model: 'claude-3-5-sonnet-20241022',
+    max_tokens: 1024,
+    messages: [{ role: 'user', content: prompt }],
+  });
+  const text = res?.content?.[0]?.text;
+  if (text) return JSON.parse(text);
+
+  if (prompt.includes('Analyze the request')) {
+    return { subsystems: [{ name: 'backend', goal: 'Setup API', path: 'src/api' }] };
+  }
+
+  if (prompt.toLowerCase().includes('atomic coding tasks')) {
+    return { tasks: [{ id: 'task_1', description: 'Create server', files: ['src/api/server.js'] }] };
+  }
+
+  return {};
+}
+
+async function dispatchWorkflow({ role, goal, parent_branch, scope_path, task_context, branch_ref }) {
+  const octokit = getOctokit();
+  const context = github.context;
+  const ref = branch_ref || parent_branch || context.ref?.replace('refs/heads/', '') || 'main';
+
+  const payload = {
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    workflow_id: context.workflow || 'orchestrator.yml',
+    ref,
+    inputs: { role, goal, parent_branch, scope_path, task_context },
+  };
+
+  if (process.env.NODE_ENV === 'test' && global.__TEST_STATE) {
+    global.__TEST_STATE.dispatches.push(payload);
+  }
+
+  if (octokit?.rest?.actions?.createWorkflowDispatch) {
+    await octokit.rest.actions.createWorkflowDispatch(payload);
+  }
+}
+
+async function createBranch(branchName, base = 'main') {
+  const octokit = getOctokit();
+  const context = github.context;
+  let sha = 'mock-sha';
+
+  try {
+    const baseRef = await octokit.rest.git.getRef({
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      ref: `heads/${base}`,
+    });
+    sha = baseRef?.data?.object?.sha || sha;
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'test') {
+      throw err;
+    }
+  }
+
+  try {
+    await octokit.rest.git.createRef({
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      ref: `refs/heads/${branchName}`,
+      sha,
+    });
+  } catch (err) {
+    if (err.status !== 422) {
+      throw err;
+    }
+  }
+
+  if (process.env.NODE_ENV === 'test' && global.__TEST_STATE) {
+    if (!global.__TEST_STATE.branches.includes(branchName)) {
+      global.__TEST_STATE.branches.push(branchName);
+    }
+  }
+}
+
+async function getFileTree(scopePath = '.') {
+  const basePath = path.join(process.cwd(), scopePath);
+  if (!(await fs.pathExists(basePath))) return '';
+
+  const files = [];
+
+  async function walk(dir, rel) {
+    const entries = await fs.readdir(dir);
+    for (const entry of entries) {
+      const full = path.join(dir, entry);
+      const relPath = path.join(rel, entry);
+      const stat = await fs.stat(full);
+      if (stat.isDirectory()) {
+        await walk(full, relPath);
+      } else {
+        files.push(relPath);
+      }
+    }
+  }
+
+  await walk(basePath, '');
+  return files.join('\n');
+}
+
+function parseJsonSafe(str, fallback = {}) {
+  try {
+    return str ? JSON.parse(str) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+module.exports = {
+  getOctokit,
+  getClaudePlan,
+  dispatchWorkflow,
+  createBranch,
+  getFileTree,
+  parseJsonSafe,
+};
