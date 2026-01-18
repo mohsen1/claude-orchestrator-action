@@ -3,19 +3,26 @@ import * as github from '@actions/github';
 import fs from 'fs-extra';
 import path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
-import { getOctokit, parseJsonSafe } from './utils';
+import { getOctokit, parseJsonSafe, createBranch } from './utils';
 
 async function run() {
   const goal = core.getInput('goal');
   const parentBranch = core.getInput('parent_branch') || 'main';
   const taskContext = core.getInput('task_context');
-  const task = parseJsonSafe<{ files?: string[] }>(taskContext, {});
+  const task = parseJsonSafe<{ id?: string; files?: string[] }>(taskContext, {});
   const files = task.files || [];
 
   if (files.length === 0) {
     console.log('No files to edit. Skipping worker.');
     return;
   }
+
+  // Create a unique branch for this worker's changes
+  const taskId = task.id || 'task';
+  const timestamp = Date.now().toString(36);
+  const branchName = `worker-${taskId}-${timestamp}`;
+  console.log(`Creating worker branch: ${branchName}`);
+  await createBranch(branchName, parentBranch);
 
   const anthropic = new Anthropic({ apiKey: core.getInput('anthropic_key') });
   const prompt = `
@@ -36,7 +43,7 @@ const app = express();
 module.exports = app;`;
   } else {
     const msg = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-sonnet-4-5-20250514',
       max_tokens: 2048,
       messages: [{ role: 'user', content: prompt }],
     });
@@ -52,13 +59,18 @@ console.log('placeholder');`;
     goal,
     parentBranch,
     body: taskContext,
+    branchName,
   });
 }
 
 async function writeFilesFromResponse(files: string[], responseText: string) {
   const map = extractFileContents(responseText);
   for (const file of files) {
-    const content = map[file] || responseText;
+    if (!(file in map)) {
+      console.log(`Warning: No content found for ${file} in response`);
+      continue;
+    }
+    const content = map[file];
     const targetPath = path.isAbsolute(file) ? file : path.join(process.cwd(), file);
     await fs.ensureDir(path.dirname(targetPath));
     await fs.writeFile(targetPath, content.trim() + '\n');
@@ -76,10 +88,20 @@ function extractFileContents(text: string) {
   return result;
 }
 
-async function openPullRequest({ goal, parentBranch, body }: { goal: string; parentBranch: string; body?: string }) {
+async function openPullRequest({
+  goal,
+  parentBranch,
+  body,
+  branchName,
+}: {
+  goal: string;
+  parentBranch: string;
+  body?: string;
+  branchName?: string;
+}) {
   const octokit = getOctokit();
   const context = github.context;
-  const headBranch = context.ref?.replace('refs/heads/', '') || 'main';
+  const headBranch = branchName || context.ref?.replace('refs/heads/', '') || 'main';
 
   const payload = {
     owner: context.repo.owner,

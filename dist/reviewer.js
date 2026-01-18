@@ -79,7 +79,7 @@ async function run() {
       { "approved": false, "comment": "Fix syntax error on line 5." }
     `;
         const msg = await anthropic.messages.create({
-            model: 'claude-3-5-sonnet-20241022',
+            model: 'claude-sonnet-4-5-20250514',
             max_tokens: 1024,
             messages: [{ role: 'user', content: prompt }],
         });

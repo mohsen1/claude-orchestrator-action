@@ -53,6 +53,12 @@ async function run() {
         console.log('No files to edit. Skipping worker.');
         return;
     }
+    // Create a unique branch for this worker's changes
+    const taskId = task.id || 'task';
+    const timestamp = Date.now().toString(36);
+    const branchName = `worker-${taskId}-${timestamp}`;
+    console.log(`Creating worker branch: ${branchName}`);
+    await (0, utils_1.createBranch)(branchName, parentBranch);
     const anthropic = new sdk_1.default({ apiKey: core.getInput('anthropic_key') });
     const prompt = `
     You are a code worker.
@@ -71,7 +77,7 @@ module.exports = app;`;
     }
     else {
         const msg = await anthropic.messages.create({
-            model: 'claude-3-5-sonnet-20241022',
+            model: 'claude-sonnet-4-5-20250514',
             max_tokens: 2048,
             messages: [{ role: 'user', content: prompt }],
         });
@@ -85,12 +91,17 @@ console.log('placeholder');`;
         goal,
         parentBranch,
         body: taskContext,
+        branchName,
     });
 }
 async function writeFilesFromResponse(files, responseText) {
     const map = extractFileContents(responseText);
     for (const file of files) {
-        const content = map[file] || responseText;
+        if (!(file in map)) {
+            console.log(`Warning: No content found for ${file} in response`);
+            continue;
+        }
+        const content = map[file];
         const targetPath = path_1.default.isAbsolute(file) ? file : path_1.default.join(process.cwd(), file);
         await fs_extra_1.default.ensureDir(path_1.default.dirname(targetPath));
         await fs_extra_1.default.writeFile(targetPath, content.trim() + '\n');
@@ -106,10 +117,10 @@ function extractFileContents(text) {
     }
     return result;
 }
-async function openPullRequest({ goal, parentBranch, body }) {
+async function openPullRequest({ goal, parentBranch, body, branchName, }) {
     const octokit = (0, utils_1.getOctokit)();
     const context = github.context;
-    const headBranch = context.ref?.replace('refs/heads/', '') || 'main';
+    const headBranch = branchName || context.ref?.replace('refs/heads/', '') || 'main';
     const payload = {
         owner: context.repo.owner,
         repo: context.repo.repo,
