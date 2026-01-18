@@ -1,6 +1,13 @@
 import * as core from '@actions/core';
 import { getClaudePlan, dispatchWorkflow, createBranch } from './utils';
 
+function sanitizeBranchName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '');
+}
+
 async function run() {
   const goal = core.getInput('goal');
 
@@ -24,7 +31,8 @@ async function run() {
   if (!plan?.subsystems) return;
 
   for (const system of plan.subsystems) {
-    const branchName = `feature/${system.name}`;
+    const sanitizedName = sanitizeBranchName(system.name);
+    const branchName = `feature/${sanitizedName}`;
     console.log(`Creating subsystem branch: ${branchName}`);
     await createBranch(branchName, 'main');
 

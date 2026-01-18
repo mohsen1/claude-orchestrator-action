@@ -13,6 +13,15 @@ jest.mock('@actions/github', () => ({
   getOctokit: jest.fn(),
 }));
 jest.mock('@anthropic-ai/sdk', () => jest.fn());
+jest.mock('@actions/exec', () => ({
+  exec: jest.fn((cmd: string, args: string[], options?: any) => {
+    // Mock git status to return nothing (no changes)
+    if (cmd === 'git' && args?.[0] === 'status') {
+      options?.listeners?.stdout?.(Buffer.from(''));
+    }
+    return Promise.resolve(0);
+  }),
+}));
 
 describe('Virtual GitHub Simulator', () => {
   let tmp: Awaited<ReturnType<typeof tmpDir>>;
