@@ -1,5 +1,5 @@
-const core = require('@actions/core');
-const { getClaudePlan, dispatchWorkflow, createBranch } = require('./utils');
+import * as core from '@actions/core';
+import { getClaudePlan, dispatchWorkflow, createBranch } from './utils';
 
 async function run() {
   const goal = core.getInput('goal');
@@ -39,4 +39,4 @@ async function run() {
   }
 }
 
-module.exports = { run };
+export { run };

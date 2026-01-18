@@ -1,13 +1,13 @@
-const core = require('@actions/core');
-const github = require('@actions/github');
-const Anthropic = require('@anthropic-ai/sdk');
-const { getOctokit } = require('./utils');
+import * as core from '@actions/core';
+import * as github from '@actions/github';
+import Anthropic from '@anthropic-ai/sdk';
+import { getOctokit } from './utils';
 
 async function run() {
   const octokit = getOctokit();
   const anthropicKey = core.getInput('anthropic_key');
   const context = github.context;
-  const pr = context.payload?.pull_request;
+  const pr = (context.payload as any)?.pull_request;
 
   if (!pr || !pr.title?.startsWith('AI:')) {
     console.log('No AI PR to review. Skipping.');
@@ -52,7 +52,7 @@ async function run() {
     });
 
     try {
-      review = JSON.parse(msg?.content?.[0]?.text || '{}');
+      review = JSON.parse((msg as any)?.content?.[0]?.text || '{}');
     } catch {
       review = { approved: false, comment: 'Unable to parse review response.' };
     }
@@ -79,7 +79,7 @@ async function run() {
   }
 }
 
-async function checkUpstreamPR(octokit, context, featureBranch) {
+async function checkUpstreamPR(octokit: ReturnType<typeof getOctokit>, context: typeof github.context, featureBranch: string) {
   if (featureBranch === 'main') return;
 
   const existingPrs =
@@ -100,8 +100,8 @@ async function checkUpstreamPR(octokit, context, featureBranch) {
       body: 'Subsystem implementation ready for review.',
     };
 
-    if (process.env.NODE_ENV === 'test' && global.__TEST_STATE) {
-      global.__TEST_STATE.prs.push(payload);
+    if (process.env.NODE_ENV === 'test' && (global as any).__TEST_STATE) {
+      (global as any).__TEST_STATE.prs.push(payload);
       return;
     }
 
@@ -111,4 +111,4 @@ async function checkUpstreamPR(octokit, context, featureBranch) {
   }
 }
 
-module.exports = { run };
+export { run };

@@ -1,3 +1,12 @@
+import path from 'path';
+import fs from 'fs-extra';
+import { dir as tmpDir } from 'tmp-promise';
+import { run as directorRun } from '../src/director';
+import { run as architectRun } from '../src/architect';
+import { run as workerRun } from '../src/worker';
+import { run as reviewerRun } from '../src/reviewer';
+import { state, setInputs, setContext, resetState, setupAnthropicMock } from './mocks';
+
 jest.mock('@actions/core', () => ({ getInput: jest.fn(), setFailed: jest.fn() }));
 jest.mock('@actions/github', () => ({
   context: { repo: { owner: '', repo: '' }, ref: '', workflow: '', payload: {} },
@@ -5,25 +14,16 @@ jest.mock('@actions/github', () => ({
 }));
 jest.mock('@anthropic-ai/sdk', () => jest.fn());
 
-const path = require('path');
-const fs = require('fs-extra');
-const { dir: tmpDir } = require('tmp-promise');
-const director = require('../src/director');
-const architect = require('../src/architect');
-const worker = require('../src/worker');
-const reviewer = require('../src/reviewer');
-const { state, setInputs, setContext, resetState, setupAnthropicMock } = require('./mocks');
-
 describe('Virtual GitHub Simulator', () => {
-  let tmp;
-  let originalCwd;
+  let tmp: Awaited<ReturnType<typeof tmpDir>>;
+  let originalCwd: string;
 
   beforeEach(async () => {
     tmp = await tmpDir({ unsafeCleanup: true });
     originalCwd = process.cwd();
     process.chdir(tmp.path);
     resetState(tmp.path);
-    global.__TEST_STATE = state;
+    (global as any).__TEST_STATE = state;
     setupAnthropicMock();
   });
 
@@ -42,7 +42,7 @@ describe('Virtual GitHub Simulator', () => {
     });
     setContext();
 
-    await director.run();
+    await directorRun();
 
     expect(state.dispatches[0].inputs.role).toBe('architect');
     expect(state.branches).toContain('feature/backend');
@@ -58,7 +58,7 @@ describe('Virtual GitHub Simulator', () => {
     });
     setContext({ ref: 'refs/heads/feature/backend' });
 
-    await architect.run();
+    await architectRun();
 
     expect(state.dispatches[0].inputs.role).toBe('worker');
     expect(state.dispatches[0].inputs.task_context).toContain('task_1');
@@ -82,7 +82,7 @@ describe('Virtual GitHub Simulator', () => {
     });
     setContext({ ref: 'refs/heads/task/backend-api-01' });
 
-    await worker.run();
+    await workerRun();
 
     const filePath = path.join(process.cwd(), 'src/api/server.js');
     expect(await fs.pathExists(filePath)).toBe(true);
@@ -114,7 +114,7 @@ describe('Virtual GitHub Simulator', () => {
       },
     });
 
-    await reviewer.run();
+    await reviewerRun();
 
     expect(state.prs.find((pr) => pr.title?.startsWith('Director Review'))).toBeTruthy();
   });

@@ -1,6 +1,6 @@
-const core = require('@actions/core');
-const github = require('@actions/github');
-const { getClaudePlan, dispatchWorkflow, getFileTree } = require('./utils');
+import * as core from '@actions/core';
+import * as github from '@actions/github';
+import { getClaudePlan, dispatchWorkflow, getFileTree } from './utils';
 
 async function run() {
   const goal = core.getInput('goal');
@@ -44,4 +44,4 @@ async function run() {
   }
 }
 
-module.exports = { run };
+export { run };

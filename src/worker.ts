@@ -1,15 +1,15 @@
-const core = require('@actions/core');
-const github = require('@actions/github');
-const fs = require('fs-extra');
-const path = require('path');
-const Anthropic = require('@anthropic-ai/sdk');
-const { getOctokit, parseJsonSafe } = require('./utils');
+import * as core from '@actions/core';
+import * as github from '@actions/github';
+import fs from 'fs-extra';
+import path from 'path';
+import Anthropic from '@anthropic-ai/sdk';
+import { getOctokit, parseJsonSafe } from './utils';
 
 async function run() {
   const goal = core.getInput('goal');
   const parentBranch = core.getInput('parent_branch') || 'main';
   const taskContext = core.getInput('task_context');
-  const task = parseJsonSafe(taskContext, {});
+  const task = parseJsonSafe<{ files?: string[] }>(taskContext, {});
   const files = task.files || [];
 
   if (files.length === 0) {
@@ -27,7 +27,7 @@ async function run() {
     Provide full file contents for the files above. If multiple files are needed, prefix each section with "FILE: <path>".
   `;
 
-  let responseText;
+  let responseText: string;
 
   if (process.env.NODE_ENV === 'test') {
     responseText = `FILE: ${files[0]}
@@ -55,7 +55,7 @@ console.log('placeholder');`;
   });
 }
 
-async function writeFilesFromResponse(files, responseText) {
+async function writeFilesFromResponse(files: string[], responseText: string) {
   const map = extractFileContents(responseText);
   for (const file of files) {
     const content = map[file] || responseText;
@@ -66,8 +66,8 @@ async function writeFilesFromResponse(files, responseText) {
   }
 }
 
-function extractFileContents(text) {
-  const result = {};
+function extractFileContents(text: string) {
+  const result: Record<string, string> = {};
   const regex = /FILE:\s*([^\n]+)\n([\s\S]*?)(?=FILE:|$)/g;
   let match;
   while ((match = regex.exec(text)) !== null) {
@@ -76,7 +76,7 @@ function extractFileContents(text) {
   return result;
 }
 
-async function openPullRequest({ goal, parentBranch, body }) {
+async function openPullRequest({ goal, parentBranch, body }: { goal: string; parentBranch: string; body?: string }) {
   const octokit = getOctokit();
   const context = github.context;
   const headBranch = context.ref?.replace('refs/heads/', '') || 'main';
@@ -90,8 +90,8 @@ async function openPullRequest({ goal, parentBranch, body }) {
     body: body || 'Automated worker output.',
   };
 
-  if (process.env.NODE_ENV === 'test' && global.__TEST_STATE) {
-    global.__TEST_STATE.prs.push(payload);
+  if (process.env.NODE_ENV === 'test' && (global as any).__TEST_STATE) {
+    (global as any).__TEST_STATE.prs.push(payload);
   }
 
   if (octokit?.rest?.pulls?.create) {
@@ -99,4 +99,4 @@ async function openPullRequest({ goal, parentBranch, body }) {
   }
 }
 
-module.exports = { run };
+export { run };

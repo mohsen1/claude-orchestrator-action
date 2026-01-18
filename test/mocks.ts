@@ -1,8 +1,14 @@
-const fs = require('fs-extra');
-const path = require('path');
+import fs from 'fs-extra';
+
+type TestState = {
+  prs: Array<any>;
+  dispatches: Array<any>;
+  branches: string[];
+  fileSystemRoot: string;
+};
 
 // --- Virtual State ---
-const state = {
+const state: TestState = {
   prs: [],
   dispatches: [],
   branches: ['main'],
@@ -58,7 +64,7 @@ const mockOctokit = {
 const mockAnthropic = {
   messages: {
     create: jest.fn().mockImplementation(async ({ messages }) => {
-      const prompt = messages[0].content;
+      const prompt = messages[0].content as string;
       const lower = prompt.toLowerCase();
 
       if (prompt.includes('Analyze the request')) {
@@ -109,12 +115,24 @@ module.exports = app;`,
   },
 };
 
-function setInputs(inputs) {
+function setInputs(inputs: Record<string, string>) {
   const core = require('@actions/core');
-  core.getInput.mockImplementation((name) => inputs[name]);
+  core.getInput.mockImplementation((name: string) => inputs[name]);
 }
 
-function setContext({ owner = 'acme', repo = 'repo', ref = 'refs/heads/main', workflow = 'orchestrator.yml', payload = {} } = {}) {
+function setContext({
+  owner = 'acme',
+  repo = 'repo',
+  ref = 'refs/heads/main',
+  workflow = 'orchestrator.yml',
+  payload = {},
+}: {
+  owner?: string;
+  repo?: string;
+  ref?: string;
+  workflow?: string;
+  payload?: any;
+} = {}) {
   const github = require('@actions/github');
   github.context.repo = { owner, repo };
   github.context.ref = ref;
@@ -123,11 +141,11 @@ function setContext({ owner = 'acme', repo = 'repo', ref = 'refs/heads/main', wo
   github.getOctokit.mockReturnValue(mockOctokit);
 }
 
-function resetState(rootPath) {
+function resetState(rootPath?: string) {
   state.prs = [];
   state.dispatches = [];
   state.branches = ['main'];
-  state.fileSystemRoot = rootPath;
+  state.fileSystemRoot = rootPath || '';
   if (rootPath) {
     fs.emptyDirSync(rootPath);
   }
@@ -138,12 +156,4 @@ function setupAnthropicMock() {
   Anthropic.mockImplementation(() => mockAnthropic);
 }
 
-module.exports = {
-  state,
-  mockOctokit,
-  mockAnthropic,
-  setInputs,
-  setContext,
-  resetState,
-  setupAnthropicMock,
-};
+export { state, mockOctokit, mockAnthropic, setInputs, setContext, resetState, setupAnthropicMock };

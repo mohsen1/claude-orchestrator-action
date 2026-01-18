@@ -1,15 +1,24 @@
-const core = require('@actions/core');
-const github = require('@actions/github');
-const fs = require('fs-extra');
-const path = require('path');
-const Anthropic = require('@anthropic-ai/sdk');
+import * as core from '@actions/core';
+import * as github from '@actions/github';
+import fs from 'fs-extra';
+import path from 'path';
+import Anthropic from '@anthropic-ai/sdk';
+
+type WorkflowInputs = {
+  role: string;
+  goal: string;
+  parent_branch?: string;
+  scope_path?: string;
+  task_context?: string;
+  branch_ref?: string;
+};
 
 function getOctokit() {
   const token = core.getInput('github_token');
   return github.getOctokit(token);
 }
 
-async function getClaudePlan(prompt) {
+async function getClaudePlan(prompt: string): Promise<any> {
   if (process.env.NODE_ENV === 'test') {
     if (prompt.includes('Analyze the request')) {
       return { subsystems: [{ name: 'backend', goal: 'Setup API', path: 'src/api' }] };
@@ -25,7 +34,7 @@ async function getClaudePlan(prompt) {
     max_tokens: 1024,
     messages: [{ role: 'user', content: prompt }],
   });
-  const text = res?.content?.[0]?.text;
+  const text = (res as any)?.content?.[0]?.text;
   if (text) return JSON.parse(text);
 
   if (prompt.includes('Analyze the request')) {
@@ -39,7 +48,7 @@ async function getClaudePlan(prompt) {
   return {};
 }
 
-async function dispatchWorkflow({ role, goal, parent_branch, scope_path, task_context, branch_ref }) {
+async function dispatchWorkflow({ role, goal, parent_branch, scope_path, task_context, branch_ref }: WorkflowInputs) {
   const octokit = getOctokit();
   const context = github.context;
   const ref = branch_ref || parent_branch || context.ref?.replace('refs/heads/', '') || 'main';
@@ -52,8 +61,8 @@ async function dispatchWorkflow({ role, goal, parent_branch, scope_path, task_co
     inputs: { role, goal, parent_branch, scope_path, task_context },
   };
 
-  if (process.env.NODE_ENV === 'test' && global.__TEST_STATE) {
-    global.__TEST_STATE.dispatches.push(payload);
+  if (process.env.NODE_ENV === 'test' && (global as any).__TEST_STATE) {
+    (global as any).__TEST_STATE.dispatches.push(payload);
   }
 
   if (octokit?.rest?.actions?.createWorkflowDispatch) {
@@ -61,7 +70,7 @@ async function dispatchWorkflow({ role, goal, parent_branch, scope_path, task_co
   }
 }
 
-async function createBranch(branchName, base = 'main') {
+async function createBranch(branchName: string, base = 'main') {
   const octokit = getOctokit();
   const context = github.context;
   let sha = 'mock-sha';
@@ -92,20 +101,20 @@ async function createBranch(branchName, base = 'main') {
     }
   }
 
-  if (process.env.NODE_ENV === 'test' && global.__TEST_STATE) {
-    if (!global.__TEST_STATE.branches.includes(branchName)) {
-      global.__TEST_STATE.branches.push(branchName);
+  if (process.env.NODE_ENV === 'test' && (global as any).__TEST_STATE) {
+    if (!(global as any).__TEST_STATE.branches.includes(branchName)) {
+      (global as any).__TEST_STATE.branches.push(branchName);
     }
   }
 }
 
-async function getFileTree(scopePath = '.') {
+async function getFileTree(scopePath = '.'): Promise<string> {
   const basePath = path.join(process.cwd(), scopePath);
   if (!(await fs.pathExists(basePath))) return '';
 
-  const files = [];
+  const files: string[] = [];
 
-  async function walk(dir, rel) {
+  async function walk(dir: string, rel: string) {
     const entries = await fs.readdir(dir);
     for (const entry of entries) {
       const full = path.join(dir, entry);
@@ -123,19 +132,12 @@ async function getFileTree(scopePath = '.') {
   return files.join('\n');
 }
 
-function parseJsonSafe(str, fallback = {}) {
+function parseJsonSafe<T>(str: string | undefined | null, fallback = {} as T): T {
   try {
-    return str ? JSON.parse(str) : fallback;
+    return str ? (JSON.parse(str) as T) : fallback;
   } catch {
     return fallback;
   }
 }
 
-module.exports = {
-  getOctokit,
-  getClaudePlan,
-  dispatchWorkflow,
-  createBranch,
-  getFileTree,
-  parseJsonSafe,
-};
+export { getOctokit, getClaudePlan, dispatchWorkflow, createBranch, getFileTree, parseJsonSafe };
