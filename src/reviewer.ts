@@ -14,6 +14,14 @@ async function run() {
     return;
   }
 
+  // Skip reviewing PRs created by workers (they start with "worker-")
+  // GitHub doesn't allow reviewing your own PR
+  const headRef = pr.head?.ref;
+  if (headRef && headRef.startsWith('worker-')) {
+    console.log(`Skipping review of worker PR ${headRef} (cannot review own PR)`);
+    return;
+  }
+
   console.log(`Architect reviewing PR #${pr.number}: ${pr.title}`);
 
   const diff =

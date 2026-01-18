@@ -119,6 +119,7 @@ describe('Virtual GitHub Simulator', () => {
           number: 1,
           title: 'AI: Create server',
           base: { ref: 'feature/backend' },
+          head: { ref: 'task/backend-api-01' },
         },
       },
     });
