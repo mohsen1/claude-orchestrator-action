@@ -128,9 +128,20 @@ export const GitOperations = {
       // Push (to specific branch if provided as string, otherwise push current HEAD)
       // First try to pull to incorporate any remote changes (e.g., from merged PRs)
       try {
+        // Fetch latest from origin
+        await execa('git', ['fetch', 'origin']);
+        // Try rebase first
         await execa('git', ['pull', '--rebase', 'origin', 'HEAD']);
       } catch {
-        // Pull might fail if branch doesn't exist remotely yet, that's OK
+        // If rebase fails, try to stash, pull, and reapply
+        try {
+          const { stdout: currentBranch } = await execa('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
+          await execa('git', ['stash']);
+          await execa('git', ['pull', 'origin', currentBranch.trim(), '--allow-unrelated-histories']);
+          await execa('git', ['stash', 'pop']);
+        } catch {
+          // Pull might fail if branch doesn't exist remotely yet, that's OK
+        }
       }
       
       if (typeof branchOrFiles === 'string') {
