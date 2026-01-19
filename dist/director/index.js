@@ -252,7 +252,10 @@ Provide your analysis and the JSON output below:`;
         console.log('Creating work branch:', this.state.work_branch);
         try {
             await GitOperations.createBranch(this.state.work_branch, 'main');
-            console.log('Work branch created successfully');
+            console.log('Work branch created locally');
+            // Push the branch to remote so EM branches can be created from it
+            await GitOperations.push(this.state.work_branch);
+            console.log('Work branch pushed to remote');
         }
         catch (error) {
             throw new Error(`Failed to create work branch: ${error.message}`);
