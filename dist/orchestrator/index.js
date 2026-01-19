@@ -343,7 +343,17 @@ Implement this task now.`;
         console.log(`\nMerging worker PRs for EM-${em.id}...`);
         for (const worker of em.workers) {
             if (worker.prNumber && (worker.status === 'pr_created' || worker.status === 'approved')) {
-                const result = await this.github.mergePullRequest(worker.prNumber);
+                let result = await this.github.mergePullRequest(worker.prNumber);
+                // If base branch was modified, try to update and retry
+                if (!result.merged && result.error?.includes('Base branch modified')) {
+                    console.log(`  Updating Worker-${worker.id} PR #${worker.prNumber} branch...`);
+                    const updated = await this.github.updatePullRequestBranch(worker.prNumber);
+                    if (updated) {
+                        // Wait a moment for GitHub to process the update
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                        result = await this.github.mergePullRequest(worker.prNumber);
+                    }
+                }
                 if (result.merged) {
                     worker.status = 'merged';
                     console.log(`  Merged Worker-${worker.id} PR #${worker.prNumber}${result.alreadyMerged ? ' (was already merged)' : ''}`);

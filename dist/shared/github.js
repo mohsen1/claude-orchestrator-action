@@ -255,6 +255,26 @@ export class GitHubClient {
         }
     }
     /**
+     * Update a PR branch with latest base branch changes
+     * @param prNumber - PR number
+     * @returns true if update successful, false otherwise
+     */
+    async updatePullRequestBranch(prNumber) {
+        try {
+            await this.octokit.rest.pulls.updateBranch({
+                owner: this.getRepo().owner,
+                repo: this.getRepo().repo,
+                pull_number: prNumber
+            });
+            console.log(`Updated PR #${prNumber} branch`);
+            return true;
+        }
+        catch (error) {
+            console.warn(`Failed to update PR #${prNumber} branch: ${error.message}`);
+            return false;
+        }
+    }
+    /**
      * Merge a pull request
      * @param prNumber - PR number
      * @param commitTitle - Merge commit title (optional)
@@ -289,10 +309,18 @@ export class GitHubClient {
         }
         catch (error) {
             const message = error.message;
-            // Check if it's a "not mergeable" error (conflicts, etc.)
+            // Check if it's a non-fatal merge error
             if (message.includes('not mergeable') || message.includes('405')) {
                 console.warn(`PR #${prNumber} is not mergeable (likely conflicts): ${message}`);
-                return { merged: false, alreadyMerged: false, error: 'Not mergeable - conflicts?' };
+                return { merged: false, alreadyMerged: false, error: 'Not mergeable - conflicts' };
+            }
+            if (message.includes('Base branch was modified')) {
+                console.warn(`PR #${prNumber} base branch was modified, needs update: ${message}`);
+                return { merged: false, alreadyMerged: false, error: 'Base branch modified - needs update' };
+            }
+            if (message.includes('Head branch was modified')) {
+                console.warn(`PR #${prNumber} head branch was modified: ${message}`);
+                return { merged: false, alreadyMerged: false, error: 'Head branch modified' };
             }
             throw new Error(`Failed to merge PR #${prNumber}: ${message}`);
         }

@@ -105,6 +105,12 @@ export declare class GitHubClient {
      */
     getPullRequest(prNumber: number): Promise<PullRequest>;
     /**
+     * Update a PR branch with latest base branch changes
+     * @param prNumber - PR number
+     * @returns true if update successful, false otherwise
+     */
+    updatePullRequestBranch(prNumber: number): Promise<boolean>;
+    /**
      * Merge a pull request
      * @param prNumber - PR number
      * @param commitTitle - Merge commit title (optional)
