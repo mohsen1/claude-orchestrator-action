@@ -26,7 +26,7 @@ export class ClaudeCodeRunner {
         };
     }
     /**
-     * Run a task with Claude Code
+     * Run a task with Claude Code (print mode - no file changes)
      * @param task - The task description/prompt
      * @param sessionId - Session ID for context preservation
      * @returns Execution result
@@ -84,6 +84,69 @@ export class ClaudeCodeRunner {
                     exitCode: 124
                 };
             }
+            return {
+                success: false,
+                stdout: '',
+                stderr: errorMessage,
+                exitCode: 1
+            };
+        }
+    }
+    /**
+     * Run a task with Claude Code that modifies files
+     * Uses --dangerously-skip-permissions to auto-approve file changes
+     * @param task - The task description/prompt
+     * @returns Execution result
+     */
+    async runTaskWithFileChanges(task) {
+        const env = this.buildEnv();
+        const timeoutMs = parseInt(process.env.API_TIMEOUT_MS || '600000', 10);
+        console.log(`Running Claude CLI (with file changes) with timeout: ${timeoutMs}ms`);
+        console.log(`API base URL: ${env.ANTHROPIC_BASE_URL || 'default'}`);
+        console.log(`Task length: ${task.length} chars`);
+        try {
+            const args = [
+                '--dangerously-skip-permissions',
+                '--output-format', 'text',
+                '--verbose',
+                '-p',
+                task
+            ];
+            console.log(`Claude CLI args: --dangerously-skip-permissions --output-format text --verbose -p [task]`);
+            const result = await execa('claude', args, {
+                env,
+                timeout: timeoutMs,
+                reject: false
+            });
+            if (result.timedOut) {
+                console.error('Claude CLI timed out after', timeoutMs, 'ms');
+                return {
+                    success: false,
+                    stdout: result.stdout || '',
+                    stderr: `Command timed out after ${timeoutMs}ms`,
+                    exitCode: 124
+                };
+            }
+            this.checkRateLimit(result.stdout, result.stderr);
+            if (result.exitCode !== 0) {
+                console.error('Claude CLI failed with exit code:', result.exitCode);
+                console.error('stderr:', result.stderr);
+                console.error('stdout (first 500 chars):', result.stdout.substring(0, 500));
+            }
+            else {
+                console.log('Claude CLI completed successfully');
+                console.log('stdout (first 500 chars):', result.stdout.substring(0, 500));
+            }
+            return {
+                success: result.exitCode === 0,
+                stdout: result.stdout,
+                stderr: result.stderr,
+                exitCode: result.exitCode ?? null
+            };
+        }
+        catch (error) {
+            const errorMessage = error.message;
+            console.error('Claude CLI execution error:', errorMessage);
             return {
                 success: false,
                 stdout: '',

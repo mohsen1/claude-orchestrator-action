@@ -32,12 +32,19 @@ export declare class ClaudeCodeRunner {
     private config;
     constructor(options?: ClaudeOptions);
     /**
-     * Run a task with Claude Code
+     * Run a task with Claude Code (print mode - no file changes)
      * @param task - The task description/prompt
      * @param sessionId - Session ID for context preservation
      * @returns Execution result
      */
     runTask(task: string, _sessionId: string): Promise<ClaudeResult>;
+    /**
+     * Run a task with Claude Code that modifies files
+     * Uses --dangerously-skip-permissions to auto-approve file changes
+     * @param task - The task description/prompt
+     * @returns Execution result
+     */
+    runTaskWithFileChanges(task: string): Promise<ClaudeResult>;
     /**
      * Resume an existing Claude Code session
      * @param sessionId - Session ID to resume

@@ -172,7 +172,7 @@ Break this down into specific, actionable worker tasks. Each worker will impleme
                 }];
         }
     }
-    async executeWorkerTask(emId, workerTask) {
+    async executeWorkerTask(_emId, workerTask) {
         const prompt = `You are a developer implementing a specific task. Make the actual code changes.
 
 **Your Task:** ${workerTask.task}
@@ -190,9 +190,8 @@ ${this.context.issue.body}
 5. Do NOT create test files unless specifically asked
 
 Implement this task now.`;
-        const sessionId = generateSessionId('worker', this.context.issue.number, emId, workerTask.worker_id);
         try {
-            const result = await this.claude.runTask(prompt, sessionId);
+            const result = await this.claude.runTaskWithFileChanges(prompt);
             if (!result.success) {
                 return {
                     success: false,
