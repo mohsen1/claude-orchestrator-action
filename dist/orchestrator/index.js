@@ -60,6 +60,21 @@ export class EventDrivenOrchestrator {
                     await this.handlePRReview(event);
                     break;
                 case 'workflow_dispatch':
+                    // workflow_dispatch can either start new or continue existing
+                    if (event.issueNumber) {
+                        const existingBranch = await findWorkBranchForIssue(event.issueNumber);
+                        if (existingBranch) {
+                            await this.handleProgressCheck({ ...event, branch: existingBranch });
+                        }
+                        else {
+                            // No existing branch - start new orchestration
+                            await this.handleIssueLabeled(event);
+                        }
+                    }
+                    else {
+                        await this.handleProgressCheck(event);
+                    }
+                    break;
                 case 'schedule':
                     await this.handleProgressCheck(event);
                     break;
@@ -306,6 +321,8 @@ Implement this task now.`;
             head: pendingWorker.branch,
             base: em.branch
         });
+        // Add label to PR
+        await this.github.addLabels(pr.number, [this.state.config.prLabel]);
         pendingWorker.status = 'pr_created';
         pendingWorker.prNumber = pr.number;
         pendingWorker.prUrl = pr.html_url;
@@ -346,6 +363,8 @@ Implement this task now.`;
             head: em.branch,
             base: this.state.workBranch
         });
+        // Add label to PR
+        await this.github.addLabels(pr.number, [this.state.config.prLabel]);
         em.status = 'pr_created';
         em.prNumber = pr.number;
         em.prUrl = pr.html_url;
@@ -421,6 +440,8 @@ Closes #${this.state.issue.number}`;
             head: this.state.workBranch,
             base: this.state.baseBranch
         });
+        // Add label to final PR
+        await this.github.addLabels(pr.number, [this.state.config.prLabel]);
         this.state.finalPr = { number: pr.number, url: pr.html_url };
         this.state.phase = 'complete';
         await saveState(this.state, `chore: final PR created (#${pr.number})`);

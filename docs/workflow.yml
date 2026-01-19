@@ -8,9 +8,15 @@
 #     Example: [{"env":{"ANTHROPIC_AUTH_TOKEN":"your-key","ANTHROPIC_BASE_URL":"https://api.z.ai/api/anthropic"}}]
 #   - CCO_PAT: GitHub PAT with repo permissions
 #
-# Triggers:
-#   - Add 'orchestrator' label to an issue to start
-#   - System wakes up on PR events and reviews automatically
+# Configuration:
+#   - trigger_label: Label that triggers orchestration (default: 'cco')
+#   - pr_label: Label added to all CCO-created PRs (default: 'cco')
+#
+# Usage:
+#   1. Add this workflow to your repo
+#   2. Create an issue describing what you want built
+#   3. Add the trigger label (default: 'cco') to start orchestration
+#   4. All automated PRs will have the pr_label for easy identification
 
 name: Claude Orchestrator
 
@@ -40,14 +46,21 @@ permissions:
   issues: write
   pull-requests: write
 
+# Configure your trigger and PR labels here
+env:
+  TRIGGER_LABEL: 'cco'  # Change this to use a different trigger label
+  PR_LABEL: 'cco'       # Label added to all orchestrator PRs
+
 jobs:
-  # Start new orchestration when issue is labeled
+  # Start new orchestration when issue is labeled with trigger label
   start:
-    if: github.event_name == 'issues' && github.event.label.name == 'orchestrator'
+    if: github.event_name == 'issues' && github.event.label.name == 'cco'  # Match TRIGGER_LABEL
     uses: mohsen1/claude-orchestrator-action/.github/workflows/orchestrate.yml@main
     with:
       event_type: 'issue_labeled'
       issue_number: ${{ github.event.issue.number }}
+      trigger_label: 'cco'  # Match TRIGGER_LABEL
+      pr_label: 'cco'       # Match PR_LABEL
     secrets:
       CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
       CCO_PAT: ${{ secrets.CCO_PAT }}
@@ -63,6 +76,7 @@ jobs:
       event_type: 'pull_request_merged'
       pr_number: ${{ github.event.pull_request.number }}
       branch: ${{ github.event.pull_request.head.ref }}
+      pr_label: 'cco'
     secrets:
       CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
       CCO_PAT: ${{ secrets.CCO_PAT }}
@@ -80,6 +94,7 @@ jobs:
       branch: ${{ github.event.pull_request.head.ref }}
       review_state: ${{ github.event.review.state }}
       review_body: ${{ github.event.review.body }}
+      pr_label: 'cco'
     secrets:
       CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
       CCO_PAT: ${{ secrets.CCO_PAT }}
@@ -91,6 +106,7 @@ jobs:
     with:
       event_type: 'workflow_dispatch'
       issue_number: ${{ inputs.issue_number }}
+      pr_label: 'cco'
     secrets:
       CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
       CCO_PAT: ${{ secrets.CCO_PAT }}

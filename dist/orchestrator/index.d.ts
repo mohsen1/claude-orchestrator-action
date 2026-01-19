@@ -29,6 +29,7 @@ export interface OrchestratorContext {
         maxEms?: number;
         maxWorkersPerEm?: number;
         reviewWaitMinutes?: number;
+        prLabel?: string;
     };
 }
 export declare class EventDrivenOrchestrator {

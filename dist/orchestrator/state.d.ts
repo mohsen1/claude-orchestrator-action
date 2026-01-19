@@ -58,6 +58,7 @@ export interface OrchestratorState {
         maxEms: number;
         maxWorkersPerEm: number;
         reviewWaitMinutes: number;
+        prLabel: string;
     };
     createdAt: string;
     updatedAt: string;

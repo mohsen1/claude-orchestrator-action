@@ -101,6 +101,7 @@ export interface OrchestratorState {
     maxEms: number;
     maxWorkersPerEm: number;
     reviewWaitMinutes: number;
+    prLabel: string;
   };
   
   // Timestamps
@@ -132,7 +133,8 @@ export function createInitialState(params: {
     config: {
       maxEms: params.config?.maxEms || 3,
       maxWorkersPerEm: params.config?.maxWorkersPerEm || 3,
-      reviewWaitMinutes: params.config?.reviewWaitMinutes || 5
+      reviewWaitMinutes: params.config?.reviewWaitMinutes || 5,
+      prLabel: params.config?.prLabel || 'cco'
     },
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()

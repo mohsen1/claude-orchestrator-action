@@ -49,6 +49,7 @@ async function main() {
   const maxEms = process.env.MAX_EMS ? parseInt(process.env.MAX_EMS, 10) : 3;
   const maxWorkersPerEm = process.env.MAX_WORKERS_PER_EM ? parseInt(process.env.MAX_WORKERS_PER_EM, 10) : 3;
   const reviewWaitMinutes = process.env.REVIEW_WAIT_MINUTES ? parseInt(process.env.REVIEW_WAIT_MINUTES, 10) : 5;
+  const prLabel = process.env.PR_LABEL || 'cco';
 
   console.log('Event-Driven Orchestrator starting...');
   console.log(`  Event: ${eventType}`);
@@ -62,7 +63,7 @@ async function main() {
     repo: { owner: repoOwner, name: repoName },
     token,
     configs,
-    options: { maxEms, maxWorkersPerEm, reviewWaitMinutes }
+    options: { maxEms, maxWorkersPerEm, reviewWaitMinutes, prLabel }
   });
 
   // Build event
