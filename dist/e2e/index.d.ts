@@ -1,6 +1,8 @@
 /**
  * End-to-end orchestrator that runs the full hierarchy inline
  * Director -> EM -> Workers all in one workflow run
+ *
+ * Uses TmuxClaudeRunner for actual file modifications via interactive Claude CLI
  */
 import type { ClaudeConfig } from '../shared/config.js';
 export interface E2EContext {
@@ -25,9 +27,12 @@ export declare class E2EOrchestrator {
     private github;
     private configManager;
     private claude;
+    private tmuxRunner;
     private workBranch;
+    private tmuxSessionName;
     constructor(context: E2EContext);
     run(): Promise<void>;
+    private sleep;
     private createWorkBranch;
     private analyzeIssue;
     private breakdownEMTask;

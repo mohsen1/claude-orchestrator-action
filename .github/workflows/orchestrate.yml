@@ -54,6 +54,11 @@ jobs:
       - name: Install Claude Code CLI
         run: npm install -g @anthropic-ai/claude-code
 
+      - name: Ensure tmux is available
+        run: |
+          which tmux || sudo apt-get install -y tmux
+          tmux -V
+
       - name: Configure Git
         working-directory: target
         run: |

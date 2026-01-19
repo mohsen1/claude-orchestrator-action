@@ -1,10 +1,13 @@
 /**
  * End-to-end orchestrator that runs the full hierarchy inline
  * Director -> EM -> Workers all in one workflow run
+ *
+ * Uses TmuxClaudeRunner for actual file modifications via interactive Claude CLI
  */
 import { GitHubClient } from '../shared/github.js';
 import { slugify, getDirectorBranch } from '../shared/branches.js';
 import { ClaudeCodeRunner, generateSessionId } from '../shared/claude.js';
+import { TmuxClaudeRunner } from '../shared/tmux-claude-runner.js';
 import { GitOperations } from '../shared/git.js';
 import { ConfigManager } from '../shared/config.js';
 import { extractJson } from '../shared/json.js';
@@ -13,23 +16,39 @@ export class E2EOrchestrator {
     github;
     configManager;
     claude;
+    tmuxRunner;
     workBranch = '';
+    tmuxSessionName = '';
     constructor(context) {
         this.context = context;
         this.github = new GitHubClient(context.token, context.repo);
         this.configManager = ConfigManager.fromJSON(JSON.stringify(context.configs));
         const currentConfig = this.configManager.getCurrentConfig();
         const apiKey = currentConfig.apiKey || currentConfig.env?.ANTHROPIC_API_KEY || currentConfig.env?.ANTHROPIC_AUTH_TOKEN;
+        // For analysis tasks (read-only)
         this.claude = new ClaudeCodeRunner({
             apiKey,
             baseUrl: currentConfig.env?.ANTHROPIC_BASE_URL,
             model: currentConfig.model
+        });
+        // For worker tasks (file modifications via interactive tmux)
+        this.tmuxRunner = new TmuxClaudeRunner({
+            apiKey,
+            baseUrl: currentConfig.env?.ANTHROPIC_BASE_URL,
         });
     }
     async run() {
         console.log('Starting E2E Orchestration...');
         console.log(`Issue #${this.context.issue.number}: ${this.context.issue.title}`);
         try {
+            // Step 0: Initialize tmux session for interactive Claude
+            console.log('\n=== Initializing Claude (tmux) ===');
+            this.tmuxSessionName = `cco-${this.context.issue.number}-${Date.now()}`;
+            await this.tmuxRunner.createSession(this.tmuxSessionName, process.cwd());
+            console.log(`Tmux session created: ${this.tmuxSessionName}`);
+            // Wait for Claude to fully initialize
+            console.log('Waiting for Claude to initialize (10s)...');
+            await this.sleep(10000);
             // Step 1: Create work branch
             await this.createWorkBranch();
             // Step 2: Analyze issue and get EM tasks
@@ -43,7 +62,7 @@ export class E2EOrchestrator {
                 // Get worker tasks for this EM
                 const workerTasks = await this.breakdownEMTask(emTask);
                 console.log(`EM-${emTask.em_id} assigned ${workerTasks.length} worker tasks`);
-                // Execute each worker task
+                // Execute each worker task using tmux
                 for (const workerTask of workerTasks) {
                     console.log(`\n--- Worker-${workerTask.worker_id}: ${workerTask.task.substring(0, 50)}... ---`);
                     const result = await this.executeWorkerTask(emTask.em_id, workerTask);
@@ -72,6 +91,16 @@ export class E2EOrchestrator {
             await this.postFailureComment(error);
             throw error;
         }
+        finally {
+            // Cleanup tmux session
+            if (this.tmuxSessionName) {
+                console.log('\nCleaning up tmux session...');
+                await this.tmuxRunner.killSession(this.tmuxSessionName);
+            }
+        }
+    }
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
     async createWorkBranch() {
         const slug = slugify(this.context.issue.title);
@@ -191,16 +220,18 @@ ${this.context.issue.body}
 
 Implement this task now.`;
         try {
-            const result = await this.claude.runTaskWithFileChanges(prompt);
+            // Use tmux runner for file modifications (interactive mode)
+            const result = await this.tmuxRunner.runPrompt(this.tmuxSessionName, prompt);
             if (!result.success) {
                 return {
                     success: false,
-                    error: result.stderr,
+                    error: result.error || 'Unknown error',
                     filesModified: []
                 };
             }
             // Get modified files from git
             const filesModified = await GitOperations.getModifiedFiles();
+            console.log(`Worker output (first 200 chars): ${result.output.substring(0, 200)}`);
             return {
                 success: true,
                 filesModified
