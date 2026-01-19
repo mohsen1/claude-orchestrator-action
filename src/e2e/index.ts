@@ -2,13 +2,13 @@
  * End-to-end orchestrator that runs the full hierarchy inline
  * Director -> EM -> Workers all in one workflow run
  * 
- * Uses TmuxClaudeRunner for actual file modifications via interactive Claude CLI
+ * Uses Claude Agent SDK for proper file modifications
  */
 
 import { GitHubClient } from '../shared/github.js';
 import { slugify, getDirectorBranch } from '../shared/branches.js';
 import { ClaudeCodeRunner, generateSessionId } from '../shared/claude.js';
-import { TmuxClaudeRunner } from '../shared/tmux-claude-runner.js';
+import { SDKRunner } from '../shared/sdk-runner.js';
 import { GitOperations } from '../shared/git.js';
 import { ConfigManager } from '../shared/config.js';
 import { extractJson } from '../shared/json.js';
@@ -56,9 +56,8 @@ export class E2EOrchestrator {
   private github: GitHubClient;
   private configManager: ConfigManager;
   private claude: ClaudeCodeRunner;
-  private tmuxRunner: TmuxClaudeRunner;
+  private sdkRunner: SDKRunner;
   private workBranch: string = '';
-  private tmuxSessionName: string = '';
 
   constructor(context: E2EContext) {
     this.context = context;
@@ -68,17 +67,19 @@ export class E2EOrchestrator {
     const currentConfig = this.configManager.getCurrentConfig();
     const apiKey = currentConfig.apiKey || currentConfig.env?.ANTHROPIC_API_KEY || currentConfig.env?.ANTHROPIC_AUTH_TOKEN;
 
-    // For analysis tasks (read-only)
+    // For analysis tasks (read-only, uses CLI print mode)
     this.claude = new ClaudeCodeRunner({
       apiKey,
       baseUrl: currentConfig.env?.ANTHROPIC_BASE_URL,
       model: currentConfig.model
     });
 
-    // For worker tasks (file modifications via interactive tmux)
-    this.tmuxRunner = new TmuxClaudeRunner({
+    // For worker tasks (file modifications, uses SDK)
+    this.sdkRunner = new SDKRunner({
       apiKey,
       baseUrl: currentConfig.env?.ANTHROPIC_BASE_URL,
+      model: currentConfig.model,
+      workDir: process.cwd()
     });
   }
 
@@ -87,16 +88,6 @@ export class E2EOrchestrator {
     console.log(`Issue #${this.context.issue.number}: ${this.context.issue.title}`);
 
     try {
-      // Step 0: Initialize tmux session for interactive Claude
-      console.log('\n=== Initializing Claude (tmux) ===');
-      this.tmuxSessionName = `cco-${this.context.issue.number}-${Date.now()}`;
-      await this.tmuxRunner.createSession(this.tmuxSessionName, process.cwd());
-      console.log(`Tmux session created: ${this.tmuxSessionName}`);
-      
-      // Wait for Claude to fully initialize
-      console.log('Waiting for Claude to initialize (10s)...');
-      await this.sleep(10000);
-
       // Step 1: Create work branch
       await this.createWorkBranch();
 
@@ -115,7 +106,7 @@ export class E2EOrchestrator {
         const workerTasks = await this.breakdownEMTask(emTask);
         console.log(`EM-${emTask.em_id} assigned ${workerTasks.length} worker tasks`);
 
-        // Execute each worker task using tmux
+        // Execute each worker task using SDK (with file modifications)
         for (const workerTask of workerTasks) {
           console.log(`\n--- Worker-${workerTask.worker_id}: ${workerTask.task.substring(0, 50)}... ---`);
           const result = await this.executeWorkerTask(emTask.em_id, workerTask);
@@ -146,17 +137,7 @@ export class E2EOrchestrator {
       console.error('E2E Orchestration failed:', error);
       await this.postFailureComment(error as Error);
       throw error;
-    } finally {
-      // Cleanup tmux session
-      if (this.tmuxSessionName) {
-        console.log('\nCleaning up tmux session...');
-        await this.tmuxRunner.killSession(this.tmuxSessionName);
-      }
     }
-  }
-
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   private async createWorkBranch(): Promise<void> {
@@ -293,8 +274,8 @@ ${this.context.issue.body}
 Implement this task now.`;
     
     try {
-      // Use tmux runner for file modifications (interactive mode)
-      const result = await this.tmuxRunner.runPrompt(this.tmuxSessionName, prompt);
+      // Use SDK runner for file modifications
+      const result = await this.sdkRunner.executeTask(prompt);
 
       if (!result.success) {
         return {
