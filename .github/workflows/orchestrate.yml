@@ -27,7 +27,7 @@ on:
 
 jobs:
   orchestrate:
-    name: Orchestrate Issue
+    name: E2E Orchestration
     runs-on: ubuntu-latest
     steps:
       - name: Checkout orchestrator
@@ -54,6 +54,12 @@ jobs:
       - name: Install Claude Code CLI
         run: npm install -g @anthropic-ai/claude-code
 
+      - name: Configure Git
+        working-directory: target
+        run: |
+          git config user.name "Claude Orchestrator"
+          git config user.email "orchestrator@claude.ai"
+
       - name: Get issue details
         id: issue
         uses: actions/github-script@v7
@@ -68,7 +74,7 @@ jobs:
             core.setOutput('title', issue.title);
             core.setOutput('body', issue.body || '');
 
-      - name: Run Director
+      - name: Run E2E Orchestration
         working-directory: target
         env:
           GITHUB_TOKEN: ${{ secrets.CCO_PAT }}
@@ -79,10 +85,9 @@ jobs:
           MAX_EMS: ${{ inputs.max_ems }}
           MAX_WORKERS_PER_EM: ${{ inputs.max_workers_per_em }}
         run: |
-          # Extract repo info from GITHUB_REPOSITORY
           export REPO_OWNER="${GITHUB_REPOSITORY%/*}"
           export REPO_NAME="${GITHUB_REPOSITORY#*/}"
-          node ../orchestrator/dist/director/run.js
+          node ../orchestrator/dist/e2e/run.js
 
       - name: Post status comment
         if: always()
@@ -94,7 +99,12 @@ jobs:
             const status = '${{ job.status }}';
             const workflowUrl = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}';
             
-            const body = `## Orchestration Status\n\n**Status:** ${status === 'success' ? 'Complete' : 'Failed'}\n\n[View Workflow Run](${workflowUrl})\n\n---\n*Updated: ${new Date().toISOString()}*`;
+            let body;
+            if (status === 'success') {
+              body = `## Orchestration Complete\n\nThe implementation has been created. Check for a new PR.\n\n[View Workflow Run](${workflowUrl})\n\n---\n*Updated: ${new Date().toISOString()}*`;
+            } else {
+              body = `## Orchestration Failed\n\n[View Workflow Run](${workflowUrl}) for details.\n\n---\n*Updated: ${new Date().toISOString()}*`;
+            }
             
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
@@ -103,7 +113,7 @@ jobs:
               per_page: 100
             });
             
-            const existing = comments.find(c => c.body?.includes('## Orchestration Status'));
+            const existing = comments.find(c => c.body?.includes('## Orchestration'));
             
             if (existing) {
               await github.rest.issues.updateComment({
