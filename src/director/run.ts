@@ -9,35 +9,40 @@ import type { ClaudeConfig } from '../shared/config.js';
 
 async function main() {
   // Parse environment variables
-  const token = process.env.GITHUB_TOKEN || process.env.CCO_PAT;
+  // GitHub Actions prefixes inputs with INPUT_, so we check both formats
+  const getInput = (name: string): string | undefined => {
+    return process.env[`INPUT_${name}`] || process.env[name];
+  };
+
+  const token = getInput('github-token') || process.env.GITHUB_TOKEN || process.env.CCO_PAT;
   if (!token) {
-    throw new Error('GITHUB_TOKEN or CCO_PAT is required');
+    throw new Error('github-token input is required');
   }
 
-  const repoOwner = process.env.REPO_OWNER;
-  const repoName = process.env.REPO_NAME;
+  const repoOwner = getInput('repo-owner') || process.env.REPO_OWNER;
+  const repoName = getInput('repo-name') || process.env.REPO_NAME;
   if (!repoOwner || !repoName) {
-    throw new Error('REPO_OWNER and REPO_NAME are required');
+    throw new Error('repo-owner and repo-name inputs are required');
   }
 
-  const issueNumber = parseInt(process.env.ISSUE_NUMBER || '0', 10);
+  const issueNumber = parseInt(getInput('issue-number') || process.env.ISSUE_NUMBER || '0', 10);
   if (!issueNumber) {
-    throw new Error('ISSUE_NUMBER is required');
+    throw new Error('issue-number input is required');
   }
 
-  const issueTitle = process.env.ISSUE_TITLE || '';
-  const issueBody = process.env.ISSUE_BODY || '';
+  const issueTitle = getInput('issue-title') || process.env.ISSUE_TITLE || '';
+  const issueBody = getInput('issue-body') || process.env.ISSUE_BODY || '';
 
   const resume = process.env.RESUME === 'true';
 
   // Parse Claude configs
-  const configsJson = process.env.CLAUDE_CONFIGS || '[]';
+  const configsJson = getInput('claude-configs') || process.env.CLAUDE_CONFIGS || '[]';
   const configs: ClaudeConfig[] = JSON.parse(configsJson);
 
   // Parse options
-  const maxEms = parseInt(process.env.MAX_EMS || '5', 10);
-  const maxWorkersPerEm = parseInt(process.env.MAX_WORKERS_PER_EM || '4', 10);
-  const dispatchStaggerMs = parseInt(process.env.DISPATCH_STAGGER_MS || '2000', 10);
+  const maxEms = parseInt(getInput('max-ems') || process.env.MAX_EMS || '5', 10);
+  const maxWorkersPerEm = parseInt(getInput('max-workers-per-em') || process.env.MAX_WORKERS_PER_EM || '4', 10);
+  const dispatchStaggerMs = parseInt(getInput('dispatch-stagger-ms') || process.env.DISPATCH_STAGGER_MS || '2000', 10);
 
   // Build context
   const context = {

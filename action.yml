@@ -1,18 +1,29 @@
 name: 'Claude Code Orchestrator'
 description: 'Automatically break down GitHub issues into tasks and implement them using Claude Code'
+
 inputs:
+  github-token:
+    description: 'GitHub token with repo permissions'
+    required: true
   issue-number:
     description: 'The issue number to orchestrate'
     required: true
   repo-owner:
     description: 'Repository owner (defaults to current repo)'
     required: false
+    default: ${{ github.repository_owner }}
   repo-name:
     description: 'Repository name (defaults to current repo)'
     required: false
-  github-token:
-    description: 'GitHub token with repo permissions'
-    required: true
+    default: ${{ github.event.repository.name }}
+  issue-title:
+    description: 'Issue title (defaults to event)'
+    required: false
+    default: ${{ github.event.issue.title }}
+  issue-body:
+    description: 'Issue body (defaults to event)'
+    required: false
+    default: ${{ github.event.issue.body }}
   claude-configs:
     description: 'JSON array of Claude API configurations'
     required: true
@@ -28,6 +39,7 @@ inputs:
     description: 'Delay between dispatching workflows'
     required: false
     default: '2000'
+
 runs:
   using: 'node20'
   main: 'dist/director/run.js'
