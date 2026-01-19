@@ -29,6 +29,13 @@ export const GitOperations = {
      */
     async createBranch(branchName, fromBranch = 'main') {
         try {
+            // Discard state file changes before branch operations to avoid conflicts
+            try {
+                await execa('git', ['checkout', '--', '.orchestrator/state.json']);
+            }
+            catch {
+                // File might not exist, that's ok
+            }
             // Fetch the base branch
             await execa('git', ['fetch', 'origin', fromBranch]);
             // Create and checkout the new branch
@@ -49,21 +56,15 @@ export const GitOperations = {
      */
     async checkout(branchName) {
         try {
-            // Stash any local changes first to allow clean checkout
+            // Discard changes to state file before checkout to avoid conflicts
+            // State is always saved explicitly on the work branch
             try {
-                await execa('git', ['stash', '--include-untracked']);
+                await execa('git', ['checkout', '--', '.orchestrator/state.json']);
             }
             catch {
-                // Stash might fail if nothing to stash, that's ok
+                // File might not exist, that's ok
             }
             await execa('git', ['checkout', branchName]);
-            // Try to pop stash if there was one
-            try {
-                await execa('git', ['stash', 'pop']);
-            }
-            catch {
-                // Pop might fail if stash was empty, that's ok
-            }
         }
         catch (error) {
             throw new Error(`Failed to checkout branch ${branchName}: ${error.message}`);

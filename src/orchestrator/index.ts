@@ -879,12 +879,20 @@ Make the changes now.`;
       case 'initialized':
         await this.runAnalysis();
         break;
+      case 'analyzing':
+        console.log('Analysis in progress...');
+        break;
+      case 'project_setup':
+        // Continue with setup phase - treat it like worker execution
+        await this.continueWorkerExecution();
+        break;
       case 'em_assignment':
       case 'worker_execution':
         await this.continueWorkerExecution();
         break;
       case 'worker_review':
       case 'em_review':
+      case 'final_review':
         await this.checkAndMergePRs();
         break;
       case 'em_merging':
