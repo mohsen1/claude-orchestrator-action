@@ -64,7 +64,14 @@ export declare class GitHubClient {
      */
     createBranch(branchName: string, fromBranch: string): Promise<void>;
     /**
-     * Create a pull request
+     * Find existing pull request by head and base branches
+     * @param head - Head branch
+     * @param base - Base branch
+     * @returns Pull request if found, null otherwise
+     */
+    findPullRequest(head: string, base: string): Promise<PullRequest | null>;
+    /**
+     * Create a pull request or return existing one if it already exists
      * @param params - PR creation parameters
      * @returns Pull request details
      */
@@ -104,7 +111,11 @@ export declare class GitHubClient {
      * @param commitMessage - Merge commit message (optional)
      * @returns void
      */
-    mergePullRequest(prNumber: number, commitTitle?: string, commitMessage?: string): Promise<void>;
+    mergePullRequest(prNumber: number, commitTitle?: string, commitMessage?: string): Promise<{
+        merged: boolean;
+        alreadyMerged: boolean;
+        error?: string;
+    }>;
     /**
      * List pull requests
      * @param head - Filter by head branch (optional)

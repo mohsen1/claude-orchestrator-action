@@ -75,12 +75,53 @@ export class GitHubClient {
         }
     }
     /**
-     * Create a pull request
+     * Find existing pull request by head and base branches
+     * @param head - Head branch
+     * @param base - Base branch
+     * @returns Pull request if found, null otherwise
+     */
+    async findPullRequest(head, base) {
+        try {
+            const { data } = await this.octokit.rest.pulls.list({
+                owner: this.getRepo().owner,
+                repo: this.getRepo().repo,
+                head: `${this.getRepo().owner}:${head}`,
+                base,
+                state: 'all'
+            });
+            if (data.length === 0) {
+                return null;
+            }
+            const pr = data[0];
+            return {
+                number: pr.number,
+                title: pr.title,
+                body: pr.body || '',
+                head: { ref: pr.head.ref, sha: pr.head.sha },
+                base: { ref: pr.base.ref, sha: pr.base.sha },
+                html_url: pr.html_url,
+                state: pr.state,
+                merged: pr.merged_at !== null
+            };
+        }
+        catch (error) {
+            console.warn(`Failed to find PR: ${error.message}`);
+            return null;
+        }
+    }
+    /**
+     * Create a pull request or return existing one if it already exists
      * @param params - PR creation parameters
      * @returns Pull request details
      */
     async createPullRequest(params) {
         try {
+            // First check if PR already exists
+            const existing = await this.findPullRequest(params.head, params.base);
+            if (existing) {
+                console.log(`PR already exists: #${existing.number} (${params.head} -> ${params.base})`);
+                return existing;
+            }
             const { data } = await this.octokit.rest.pulls.create({
                 owner: this.getRepo().owner,
                 repo: this.getRepo().repo,
@@ -222,6 +263,16 @@ export class GitHubClient {
      */
     async mergePullRequest(prNumber, commitTitle, commitMessage) {
         try {
+            // First check if PR is already merged or closed
+            const pr = await this.getPullRequest(prNumber);
+            if (pr.merged) {
+                console.log(`PR #${prNumber} is already merged`);
+                return { merged: true, alreadyMerged: true };
+            }
+            if (pr.state === 'closed') {
+                console.log(`PR #${prNumber} is closed but not merged`);
+                return { merged: false, alreadyMerged: false, error: 'PR is closed' };
+            }
             const mergeOptions = {
                 owner: this.getRepo().owner,
                 repo: this.getRepo().repo,
@@ -234,9 +285,16 @@ export class GitHubClient {
                 mergeOptions.commit_message = commitMessage;
             }
             await this.octokit.rest.pulls.merge(mergeOptions);
+            return { merged: true, alreadyMerged: false };
         }
         catch (error) {
-            throw new Error(`Failed to merge PR #${prNumber}: ${error.message}`);
+            const message = error.message;
+            // Check if it's a "not mergeable" error (conflicts, etc.)
+            if (message.includes('not mergeable') || message.includes('405')) {
+                console.warn(`PR #${prNumber} is not mergeable (likely conflicts): ${message}`);
+                return { merged: false, alreadyMerged: false, error: 'Not mergeable - conflicts?' };
+            }
+            throw new Error(`Failed to merge PR #${prNumber}: ${message}`);
         }
     }
     /**

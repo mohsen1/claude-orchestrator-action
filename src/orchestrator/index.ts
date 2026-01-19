@@ -443,12 +443,12 @@ Implement this task now.`;
     console.log(`\nMerging worker PRs for EM-${em.id}...`);
     for (const worker of em.workers) {
       if (worker.prNumber && (worker.status === 'pr_created' || worker.status === 'approved')) {
-        try {
-          await this.github.mergePullRequest(worker.prNumber);
+        const result = await this.github.mergePullRequest(worker.prNumber);
+        if (result.merged) {
           worker.status = 'merged';
-          console.log(`  Merged Worker-${worker.id} PR #${worker.prNumber}`);
-        } catch (error) {
-          console.error(`  Failed to merge Worker-${worker.id} PR:`, error);
+          console.log(`  Merged Worker-${worker.id} PR #${worker.prNumber}${result.alreadyMerged ? ' (was already merged)' : ''}`);
+        } else {
+          console.warn(`  Could not merge Worker-${worker.id} PR #${worker.prNumber}: ${result.error}`);
         }
       }
     }
@@ -501,12 +501,12 @@ Implement this task now.`;
     console.log('\n=== Merging EM PRs ===');
     for (const em of this.state.ems) {
       if (em.prNumber && (em.status === 'pr_created' || em.status === 'approved')) {
-        try {
-          await this.github.mergePullRequest(em.prNumber);
+        const result = await this.github.mergePullRequest(em.prNumber);
+        if (result.merged) {
           em.status = 'merged';
-          console.log(`Merged EM-${em.id} PR #${em.prNumber}`);
-        } catch (error) {
-          console.error(`Failed to merge EM-${em.id} PR:`, error);
+          console.log(`Merged EM-${em.id} PR #${em.prNumber}${result.alreadyMerged ? ' (was already merged)' : ''}`);
+        } else {
+          console.warn(`Could not merge EM-${em.id} PR #${em.prNumber}: ${result.error}`);
         }
       }
     }
@@ -759,11 +759,11 @@ Please make the necessary changes to address the reviewer's feedback.`;
       // Try to merge approved worker PRs
       for (const worker of em.workers) {
         if (worker.status === 'approved' && worker.prNumber) {
-          try {
-            await this.github.mergePullRequest(worker.prNumber);
+          const result = await this.github.mergePullRequest(worker.prNumber);
+          if (result.merged) {
             worker.status = 'merged';
-          } catch (e) {
-            console.error(`Failed to merge worker PR:`, e);
+          } else {
+            console.warn(`Could not merge worker PR #${worker.prNumber}: ${result.error}`);
           }
         }
       }
@@ -775,11 +775,11 @@ Please make the necessary changes to address the reviewer's feedback.`;
 
       // Try to merge approved EM PRs
       if (em.status === 'approved' && em.prNumber) {
-        try {
-          await this.github.mergePullRequest(em.prNumber);
+        const result = await this.github.mergePullRequest(em.prNumber);
+        if (result.merged) {
           em.status = 'merged';
-        } catch (e) {
-          console.error(`Failed to merge EM PR:`, e);
+        } else {
+          console.warn(`Could not merge EM PR #${em.prNumber}: ${result.error}`);
         }
       }
     }
