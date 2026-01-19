@@ -29,10 +29,6 @@ jobs:
   orchestrate:
     name: Orchestrate Issue
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
     steps:
       - name: Checkout orchestrator
         uses: actions/checkout@v4
