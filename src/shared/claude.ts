@@ -1,0 +1,326 @@
+/**
+ * Claude Code CLI runner
+ * Handles execution of Claude Code with proper session management
+ */
+
+import { execa } from 'execa';
+
+/**
+ * Custom error for rate limit detection
+ */
+export class RateLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RateLimitError';
+  }
+}
+
+/**
+ * Result of a Claude Code execution
+ */
+export interface ClaudeResult {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+}
+
+/**
+ * Options for running Claude Code
+ */
+export interface ClaudeOptions {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}
+
+/**
+ * Manages execution of Claude Code CLI
+ */
+export class ClaudeCodeRunner {
+  private config: {
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+  };
+
+  constructor(options: ClaudeOptions = {}) {
+    this.config = {
+      apiKey: options.apiKey,
+      baseUrl: options.baseUrl,
+      model: options.model
+    };
+  }
+
+  /**
+   * Run a task with Claude Code
+   * @param task - The task description/prompt
+   * @param sessionId - Session ID for context preservation
+   * @returns Execution result
+   */
+  async runTask(task: string, sessionId: string): Promise<ClaudeResult> {
+    const env = this.buildEnv();
+
+    try {
+      const result = await execa('claude', ['-p', '--session-id', sessionId, task], {
+        env,
+        timeout: 300000, // 5 minutes
+        reject: false
+      });
+
+      // Check for rate limits
+      this.checkRateLimit(result.stdout, result.stderr);
+
+      return {
+        success: result.exitCode === 0,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode ?? null
+      };
+    } catch (error) {
+      // Handle process execution errors
+      return {
+        success: false,
+        stdout: '',
+        stderr: (error as Error).message,
+        exitCode: 1
+      };
+    }
+  }
+
+  /**
+   * Resume an existing Claude Code session
+   * @param sessionId - Session ID to resume
+   * @param prompt - Additional prompt/context for the resumed session
+   * @returns Execution result
+   */
+  async resumeSession(sessionId: string, prompt: string): Promise<ClaudeResult> {
+    const env = this.buildEnv();
+
+    try {
+      const result = await execa(
+        'claude',
+        ['-p', '--resume', sessionId, prompt],
+        {
+          env,
+          timeout: 300000,
+          reject: false
+        }
+      );
+
+      // Check for rate limits
+      this.checkRateLimit(result.stdout, result.stderr);
+
+      return {
+        success: result.exitCode === 0,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode ?? null
+      };
+    } catch (error) {
+      return {
+        success: false,
+        stdout: '',
+        stderr: (error as Error).message,
+        exitCode: 1
+      };
+    }
+  }
+
+  /**
+   * Resolve merge conflicts using Claude
+   * @param sessionId - Session ID for context
+   * @param conflictFiles - List of conflicted files
+   * @param targetBranch - Branch being rebased/merged onto
+   * @returns Execution result
+   */
+  async resolveConflicts(
+    sessionId: string,
+    conflictFiles: string[],
+    targetBranch: string
+  ): Promise<ClaudeResult> {
+    const prompt = [
+      `Merge conflict detected during rebase onto ${targetBranch}.`,
+      `Conflicted files:\n${conflictFiles.map(f => `  - ${f}`).join('\n')}`,
+      '\nPlease resolve these conflicts while preserving the intent of both changes.',
+      'After resolving, stage the files and continue the rebase.',
+      'If conflicts cannot be automatically resolved, abort the rebase and notify the user.'
+    ].join('\n');
+
+    return this.resumeSession(sessionId, prompt);
+  }
+
+  /**
+   * Generate a summary of changes made in a session
+   * @param sessionId - Session ID
+   * @param filesModified - List of modified files
+   * @returns Execution result with summary in stdout
+   */
+  async generateChangesSummary(
+    sessionId: string,
+    filesModified: string[]
+  ): Promise<string> {
+    const prompt = [
+      'Please provide a concise summary (1-2 sentences) of the changes made in this session.',
+      filesModified.length > 0
+        ? `Modified files:\n${filesModified.map(f => `  - ${f}`).join('\n')}`
+        : 'No files were modified.',
+      '\nFocus on WHAT was changed and WHY, not HOW.'
+    ].join('\n');
+
+    const result = await this.resumeSession(sessionId, prompt);
+
+    if (result.success) {
+      return result.stdout.trim();
+    }
+
+    return 'Changes: Various modifications based on task requirements.';
+  }
+
+  /**
+   * Review a pull request and provide feedback
+   * @param sessionId - Session ID
+   * @param prDescription - PR description/changes
+   * @param context - Additional context for the review
+   * @returns Execution result with review feedback
+   */
+  async reviewPullRequest(
+    sessionId: string,
+    prDescription: string,
+    context?: string
+  ): Promise<ClaudeResult> {
+    const prompt = [
+      'Please review the following pull request:',
+      prDescription,
+      context ? `\nAdditional context:\n${context}` : '',
+      '\nProvide feedback on:',
+      '1. Code quality and correctness',
+      '2. Potential issues or bugs',
+      '3. Suggested improvements',
+      '\nIf the changes look good, respond with "LGTM" (Looks Good To Me).',
+      'Otherwise, provide specific feedback on what needs to be changed.'
+    ].join('\n');
+
+    return this.resumeSession(sessionId, prompt);
+  }
+
+  /**
+   * Check if output contains rate limit indicators
+   * @throws RateLimitError if rate limit detected
+   */
+  private checkRateLimit(stdout: string, stderr: string): void {
+    const output = `${stdout} ${stderr}`.toLowerCase();
+
+    if (
+      output.includes('rate limit') ||
+      output.includes('rate_limit') ||
+      output.includes('429') ||
+      output.includes('too many requests')
+    ) {
+      throw new RateLimitError('Rate limit exceeded');
+    }
+  }
+
+  /**
+   * Build environment variables for Claude Code execution
+   */
+  private buildEnv(): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env
+    };
+
+    if (this.config.apiKey) {
+      env.ANTHROPIC_API_KEY = this.config.apiKey;
+    }
+
+    if (this.config.baseUrl) {
+      env.ANTHROPIC_BASE_URL = this.config.baseUrl;
+    }
+
+    if (this.config.model) {
+      env.ANTHROPIC_MODEL = this.config.model;
+    }
+
+    return env;
+  }
+
+  /**
+   * Update the runner configuration
+   * @param options - New configuration options
+   */
+  updateConfig(options: ClaudeOptions): void {
+    if (options.apiKey !== undefined) {
+      this.config.apiKey = options.apiKey;
+    }
+    if (options.baseUrl !== undefined) {
+      this.config.baseUrl = options.baseUrl;
+    }
+    if (options.model !== undefined) {
+      this.config.model = options.model;
+    }
+  }
+
+  /**
+   * Get current configuration
+   * @returns Current configuration
+   */
+  getConfig(): ClaudeOptions {
+    return { ...this.config };
+  }
+}
+
+/**
+ * Generate a unique session ID
+ * @param component - Component type (director, em, worker)
+ * @param issueNumber - GitHub issue number
+ * @param componentId - Component ID (EM ID, Worker ID, etc.)
+ * @returns Unique session ID
+ */
+export function generateSessionId(
+  component: 'director' | 'em' | 'worker',
+  issueNumber: number,
+  ...componentIds: number[]
+): string {
+  const timestamp = Date.now().toString(36);
+  const random = Math.random().toString(36).substring(2, 8);
+
+  const parts = [component, issueNumber, ...componentIds, timestamp, random];
+  return parts.join('-');
+}
+
+/**
+ * Parse a session ID to extract component information
+ * @param sessionId - Session ID to parse
+ * @returns Parsed session info
+ */
+export function parseSessionId(
+  sessionId: string
+): {
+  component: string;
+  issueNumber: number;
+  componentIds: number[];
+} | null {
+  const parts = sessionId.split('-');
+
+  if (parts.length < 3) {
+    return null;
+  }
+
+  const component = parts[0];
+  const issueNumber = parseInt(parts[1], 10);
+
+  if (isNaN(issueNumber)) {
+    return null;
+  }
+
+  // Remaining parts (except timestamp and random) are component IDs
+  const componentIds: number[] = [];
+  for (let i = 2; i < parts.length - 2; i++) {
+    const id = parseInt(parts[i], 10);
+    if (!isNaN(id)) {
+      componentIds.push(id);
+    }
+  }
+
+  return { component, issueNumber, componentIds };
+}

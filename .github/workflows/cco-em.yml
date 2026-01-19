@@ -1,0 +1,87 @@
+name: CCO Engineering Manager
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number'
+        required: true
+        type: number
+      em_id:
+        description: 'EM ID'
+        required: true
+        type: number
+      task_assignment:
+        description: 'Task assignment for this EM'
+        required: true
+        type: string
+      work_branch:
+        description: 'Director work branch'
+        required: true
+        type: string
+      resume:
+        description: 'Resume existing session'
+        required: false
+        type: boolean
+        default: false
+      session_id:
+        description: 'Session ID to resume'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  manage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.work_branch }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Run EM
+        env:
+          GITHUB_TOKEN: ${{ secrets.CCO_PAT }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          EM_ID: ${{ inputs.em_id }}
+          TASK_ASSIGNMENT: ${{ inputs.task_assignment }}
+          WORK_BRANCH: ${{ inputs.work_branch }}
+          RESUME: ${{ inputs.resume }}
+          SESSION_ID: ${{ inputs.session_id }}
+          CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
+          MAX_WORKERS: ${{ vars.MAX_WORKERS_PER_EM || '4' }}
+          DISPATCH_STAGGER_MS: ${{ vars.DISPATCH_STAGGER_MS || '2000' }}
+        run: node dist/em/run.js
+
+      - name: Handle failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CCO_PAT }}
+          script: |
+            const issueNumber = ${{ inputs.issue_number }};
+            const emId = ${{ inputs.em_id }};
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              labels: [`em-${emId}-failed`]
+            });

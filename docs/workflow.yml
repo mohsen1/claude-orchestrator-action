@@ -1,0 +1,62 @@
+# Claude Code Orchestrator - User Workflow
+#
+# Add this file to YOUR repository at:
+# .github/workflows/claude-orchestrator.yml
+#
+# Then add the 'orchestrator' label to any issue to trigger autonomous AI development!
+
+name: Claude Code Orchestrator
+
+on:
+  issues:
+    types: [labeled]
+
+# These permissions are required for the orchestrator to function
+permissions:
+  contents: write      # Create branches, push code
+  issues: write        # Update issue comments
+  pull-requests: write # Create and manage PRs
+  actions: write       # Dispatch workflows
+
+jobs:
+  orchestrate:
+    # Only run when the 'orchestrator' label is added
+    if: github.event.label.name == 'orchestrator'
+
+    # Use the orchestrator action from this repository
+    uses: mohsenazimi/claude-orchestrator-action/.github/workflows/cco-director.yml@main
+    with:
+      # Required: Your Claude API configurations (JSON array)
+      claude_configs: ${{ secrets.CLAUDE_CONFIGS }}
+
+      # Required: PAT with workflow scope (NOT GITHUB_TOKEN!)
+      dispatch_token: ${{ secrets.CCO_PAT }}
+
+      # Optional: Customize the trigger label (default: 'orchestrator')
+      # trigger_label: 'orchestrator'
+
+      # Optional: Maximum number of Engineering Managers (default: 5)
+      # max_ems: 5
+
+      # Optional: Maximum Workers per EM (default: 4)
+      # max_workers_per_em: 4
+
+      # Optional: Auto-merge final PR if no conflicts (default: true)
+      # auto_merge: true
+
+      # Optional: Delete branches after merge (default: true)
+      # cleanup_branches: true
+
+      # Optional: Claude model to use (default: 'sonnet')
+      # model: 'sonnet'
+
+      # Optional: Max retry attempts per component (default: 2)
+      # max_retries: 2
+
+      # Optional: Delay between dispatches in ms (default: 2000)
+      # dispatch_stagger_ms: 2000
+
+      # Optional: Minutes before marking component as stalled (default: 60)
+      # stall_timeout_minutes: 60
+
+    secrets: inherit
