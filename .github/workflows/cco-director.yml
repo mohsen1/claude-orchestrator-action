@@ -67,25 +67,6 @@ jobs:
       - name: Install Claude Code CLI
         run: npm install -g @anthropic-ai/claude-code
 
-      - name: Network Connectivity Check
-        env:
-          CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
-        run: |
-          echo "Testing network connectivity to API endpoints..."
-          
-          # Test standard Anthropic endpoint
-          echo "Testing api.anthropic.com..."
-          curl -I -s --max-time 10 https://api.anthropic.com/v1/messages | head -1 || echo "Could not reach api.anthropic.com"
-          
-          # Test z.ai endpoints (if configured)
-          echo "Testing z.ai endpoints..."
-          curl -I -s --max-time 10 https://api.z.ai/api/paas/v4 | head -1 || echo "Could not reach z.ai paas endpoint"
-          curl -I -s --max-time 10 https://api.z.ai/api/coding/paas/v4 | head -1 || echo "Could not reach z.ai coding endpoint"
-          
-          # Show GitHub runner IP info
-          echo "Runner IP information:"
-          curl -s https://api.ipify.org || echo "Could not get IP"
-
       - name: Run Director
         working-directory: target-repo
         env:
