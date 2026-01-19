@@ -16,12 +16,12 @@ This action brings autonomous AI-driven development to any repository. When you 
 
 ## Features
 
-- 🚀 **Fully Autonomous** - From issue label to merged PR without human intervention
-- ⚡ **Maximum Parallelization** - All EMs and Workers run concurrently
-- 🔄 **Auto-Recovery** - Handles merge conflicts, test failures, and retries automatically
-- 📊 **State Management** - Git-based state with human-readable progress dashboard
-- 🛡️ **Rate Limit Handling** - Automatic config rotation when hitting API limits
-- 🐕 **Watchdog** - Detects and recovers from stalled components
+- **Fully Autonomous** - From issue label to merged PR without human intervention
+- **Maximum Parallelization** - All EMs and Workers run concurrently
+- **Auto-Recovery** - Handles merge conflicts, test failures, and retries automatically
+- **State Management** - Git-based state with human-readable progress dashboard
+- **Rate Limit Handling** - Automatic config rotation when hitting API limits
+- **Watchdog** - Detects and recovers from stalled components
 
 ## Quick Start
 
@@ -37,8 +37,8 @@ In your repository, go to **Settings → Secrets and variables → Actions** and
 #### CCO_PAT (Personal Access Token)
 
 Create a PAT at https://github.com/settings/tokens with:
-- ✅ `repo` (Full control of private repositories)
-- ✅ `workflow` (Update GitHub Action workflows)
+- `repo` (Full control of private repositories)
+- `workflow` (Update GitHub Action workflows)
 
 **Important:** Use a PAT, NOT `GITHUB_TOKEN` - the default token cannot trigger workflows.
 
@@ -308,4 +308,4 @@ MIT License - see LICENSE file for details
 
 ---
 
-Made with ❤️ by the Claude Code Orchestrator team
+Made with care by the Claude Code Orchestrator team

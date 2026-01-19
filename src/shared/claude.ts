@@ -4,6 +4,7 @@
  */
 
 import { execa } from 'execa';
+import { randomUUID } from 'node:crypto';
 
 /**
  * Custom error for rate limit detection
@@ -58,11 +59,13 @@ export class ClaudeCodeRunner {
    * @param sessionId - Session ID for context preservation
    * @returns Execution result
    */
-  async runTask(task: string, sessionId: string): Promise<ClaudeResult> {
+  async runTask(task: string, _sessionId: string): Promise<ClaudeResult> {
     const env = this.buildEnv();
 
     try {
-      const result = await execa('claude', ['-p', '--session-id', sessionId, task], {
+      // Note: Not passing session-id for now to avoid UUID validation issues
+      // The CLI will manage sessions automatically
+      const result = await execa('claude', ['-p', '--no-session-persistence', task], {
         env,
         timeout: 300000, // 5 minutes
         reject: false
@@ -277,15 +280,12 @@ export class ClaudeCodeRunner {
  * @returns Unique session ID
  */
 export function generateSessionId(
-  component: 'director' | 'em' | 'worker',
-  issueNumber: number,
-  ...componentIds: number[]
+  _component: 'director' | 'em' | 'worker',
+  _issueNumber: number,
+  ..._componentIds: number[]
 ): string {
-  const timestamp = Date.now().toString(36);
-  const random = Math.random().toString(36).substring(2, 8);
-
-  const parts = [component, issueNumber, ...componentIds, timestamp, random];
-  return parts.join('-');
+  // Generate a valid UUID for Claude Code CLI
+  return randomUUID();
 }
 
 /**
