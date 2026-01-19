@@ -1,8 +1,8 @@
 # Dependencies
 node_modules/
 
-# Build output
-dist/
+# Build output - NOTE: dist/ is NOT ignored because GitHub Actions needs compiled JS
+# dist/
 *.tsbuildinfo
 
 # Test coverage
@@ -36,4 +36,6 @@ yarn-error.log*
 # Temporary files
 *.tmp
 .cache/
-/orchestrator/
+
+# Orchestrator state (should be created in target repo, not here)
+.orchestrator/

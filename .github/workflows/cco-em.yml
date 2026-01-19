@@ -39,23 +39,30 @@ jobs:
   manage:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout orchestrator action
+        uses: actions/checkout@v4
+        with:
+          repository: mohsen1/claude-orchestrator-action
+          path: orchestrator-action
+
+      - name: Checkout target repository
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.work_branch }}
+          path: target-repo
+          token: ${{ secrets.CCO_PAT }}
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build TypeScript
-        run: npm run build
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
 
       - name: Run EM
+        working-directory: target-repo
         env:
           GITHUB_TOKEN: ${{ secrets.CCO_PAT }}
           REPO_OWNER: ${{ github.repository_owner }}
@@ -69,7 +76,7 @@ jobs:
           CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
           MAX_WORKERS: ${{ vars.MAX_WORKERS_PER_EM || '4' }}
           DISPATCH_STAGGER_MS: ${{ vars.DISPATCH_STAGGER_MS || '2000' }}
-        run: node dist/em/run.js
+        run: node ../orchestrator-action/dist/em/run.js
 
       - name: Handle failure
         if: failure()

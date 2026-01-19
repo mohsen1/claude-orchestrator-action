@@ -42,26 +42,27 @@ jobs:
   work:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout orchestrator action
+        uses: actions/checkout@v4
+        with:
+          repository: mohsen1/claude-orchestrator-action
+          path: orchestrator-action
+
+      - name: Checkout target repository
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.em_branch }}
+          path: target-repo
+          token: ${{ secrets.CCO_PAT }}
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build TypeScript
-        run: npm run build
-
-      - name: Setup Claude Code
-        uses: anthropics/setup-claude-code@v1
-        with:
-          api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
 
       # RESTORE: Try to restore Claude session cache before running worker
       - name: Restore Claude Session Cache
@@ -75,6 +76,7 @@ jobs:
           enableCrossOsArchive: true
 
       - name: Run Worker
+        working-directory: target-repo
         env:
           GITHUB_TOKEN: ${{ secrets.CCO_PAT }}
           REPO_OWNER: ${{ github.repository_owner }}
@@ -88,7 +90,7 @@ jobs:
           SESSION_ID: ${{ inputs.session_id }}
           CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
           MAX_RETRIES: ${{ vars.MAX_RETRIES || '2' }}
-        run: node dist/worker/run.js
+        run: node ../orchestrator-action/dist/worker/run.js
 
       # SAVE: Always save the session cache, even if worker fails/retries
       # This uses the actual session_id (if provided) or falls back to a worker-specific key

@@ -21,28 +21,33 @@ jobs:
   check-stalled:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout orchestrator action
         uses: actions/checkout@v4
+        with:
+          repository: mohsen1/claude-orchestrator-action
+          path: orchestrator-action
+
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          path: target-repo
+          token: ${{ secrets.CCO_PAT }}
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build TypeScript
-        run: npm run build
-
       - name: Run Watchdog
+        working-directory: target-repo
         env:
           GITHUB_TOKEN: ${{ secrets.CCO_PAT }}
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
           STALL_TIMEOUT_MINUTES: ${{ inputs.stall_timeout_minutes || vars.STALL_TIMEOUT_MINUTES || '60' }}
           CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
-        run: node dist/watchdog/run.js
+        run: node ../orchestrator-action/dist/watchdog/run.js
 
       - name: Attempt recovery
         if: steps.watchdog.outputs.stalled_count > 0

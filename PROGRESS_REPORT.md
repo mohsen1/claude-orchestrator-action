@@ -168,3 +168,40 @@ claude -p "What is 2+2? Answer with just the number."
 - **Director Analysis:** Timing out ❌
 
 The most critical issue to resolve is the Claude API timeout during issue analysis. Once that works, the full orchestration pipeline should function correctly.
+
+
+---
+
+## Fixes Applied (2026-01-19)
+
+### 1. Workflow Architecture Fix
+The workflows were checking out the **wrong repository**. When triggered from the e2e-test repo, `actions/checkout@v4` was checking out the e2e-test repo (which doesn't have the action code), then trying to run `npm ci` and `npm run build`.
+
+**Fixed:** All workflows now:
+- Checkout the `mohsen1/claude-orchestrator-action` repo to get the action code
+- Checkout the target repo for working directory context
+- Run the compiled JS directly from `orchestrator-action/dist/`
+
+### 2. Removed `.orchestrator/` from Action Repo
+State files should only exist in the target repository, not in the action repo. Deleted the accidental state folder and added it to `.gitignore`.
+
+### 3. Dist Folder Now Tracked
+GitHub Actions with `node20` runtime require compiled JS to be committed. Removed `dist/` from `.gitignore` so the built files are included.
+
+### 4. Improved Error Handling in Claude Runner
+- Added timeout detection with better error messages
+- Added logging for API endpoint being used
+- Made timeout configurable via `API_TIMEOUT_MS` environment variable
+- Removed `--no-session-persistence` flag that may have caused issues
+
+### 5. Added `workflow_call` Support
+Director workflow now supports being called as a reusable workflow, enabling other repos to use it properly.
+
+## Remaining Issues
+
+### z.ai API Blocked from GitHub Actions
+The z.ai API endpoint (`https://api.z.ai/api/anthropic`) is **NOT accessible** from GitHub Actions runners. This is likely due to:
+- IP-based restrictions on z.ai
+- GitHub Actions egress IP ranges being blocked
+
+**Solution:** Use Anthropic's official API endpoint (`https://api.anthropic.com`) with a standard `ANTHROPIC_API_KEY` for GitHub Actions.

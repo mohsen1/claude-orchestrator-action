@@ -18,19 +18,27 @@ jobs:
     if: startsWith(github.event.pull_request.head.ref, 'cco/')
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout orchestrator action
         uses: actions/checkout@v4
+        with:
+          repository: mohsen1/claude-orchestrator-action
+          path: orchestrator-action
+
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          path: target-repo
+          token: ${{ secrets.CCO_PAT }}
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build TypeScript
-        run: npm run build
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
 
       - name: Parse PR context
         id: parse
@@ -75,7 +83,8 @@ jobs:
           REVIEW_STATE: ${{ steps.parse.outputs.review_state }}
           REVIEW_BODY: ${{ steps.parse.outputs.review_body }}
           CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
-        run: node dist/review-handler/run.js
+        working-directory: target-repo
+        run: node ../orchestrator-action/dist/review-handler/run.js
 
       - name: Handle failure
         if: failure()

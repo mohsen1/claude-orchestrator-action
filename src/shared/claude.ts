@@ -61,18 +61,36 @@ export class ClaudeCodeRunner {
    */
   async runTask(task: string, _sessionId: string): Promise<ClaudeResult> {
     const env = this.buildEnv();
+    const timeoutMs = parseInt(process.env.API_TIMEOUT_MS || '300000', 10);
+
+    console.log(`Running Claude CLI with timeout: ${timeoutMs}ms`);
+    console.log(`API base URL: ${env.ANTHROPIC_BASE_URL || 'default'}`);
 
     try {
-      // Note: Not passing session-id for now to avoid UUID validation issues
-      // The CLI will manage sessions automatically
-      const result = await execa('claude', ['-p', '--no-session-persistence', task], {
+      const result = await execa('claude', ['-p', '--output-format', 'text', task], {
         env,
-        timeout: 300000, // 5 minutes
+        timeout: timeoutMs,
         reject: false
       });
 
+      if (result.timedOut) {
+        console.error('Claude CLI timed out after', timeoutMs, 'ms');
+        return {
+          success: false,
+          stdout: result.stdout || '',
+          stderr: `Command timed out after ${timeoutMs}ms. This may indicate network issues or an unreachable API endpoint.`,
+          exitCode: 124
+        };
+      }
+
       // Check for rate limits
       this.checkRateLimit(result.stdout, result.stderr);
+
+      if (result.exitCode !== 0) {
+        console.error('Claude CLI failed with exit code:', result.exitCode);
+        console.error('stderr:', result.stderr);
+        console.error('stdout:', result.stdout);
+      }
 
       return {
         success: result.exitCode === 0,
@@ -81,11 +99,23 @@ export class ClaudeCodeRunner {
         exitCode: result.exitCode ?? null
       };
     } catch (error) {
-      // Handle process execution errors
+      const errorMessage = (error as Error).message;
+      console.error('Claude CLI execution error:', errorMessage);
+
+      // Check if it's a timeout error
+      if (errorMessage.includes('timed out') || errorMessage.includes('ETIMEDOUT')) {
+        return {
+          success: false,
+          stdout: '',
+          stderr: `Claude CLI timed out: ${errorMessage}. Check if the API endpoint (${env.ANTHROPIC_BASE_URL || 'default'}) is accessible.`,
+          exitCode: 124
+        };
+      }
+
       return {
         success: false,
         stdout: '',
-        stderr: (error as Error).message,
+        stderr: errorMessage,
         exitCode: 1
       };
     }
@@ -99,17 +129,27 @@ export class ClaudeCodeRunner {
    */
   async resumeSession(sessionId: string, prompt: string): Promise<ClaudeResult> {
     const env = this.buildEnv();
+    const timeoutMs = parseInt(process.env.API_TIMEOUT_MS || '300000', 10);
 
     try {
       const result = await execa(
         'claude',
-        ['-p', '--resume', sessionId, prompt],
+        ['-p', '--resume', sessionId, '--output-format', 'text', prompt],
         {
           env,
-          timeout: 300000,
+          timeout: timeoutMs,
           reject: false
         }
       );
+
+      if (result.timedOut) {
+        return {
+          success: false,
+          stdout: result.stdout || '',
+          stderr: `Command timed out after ${timeoutMs}ms`,
+          exitCode: 124
+        };
+      }
 
       // Check for rate limits
       this.checkRateLimit(result.stdout, result.stderr);
