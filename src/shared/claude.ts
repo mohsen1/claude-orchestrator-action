@@ -236,11 +236,10 @@ export class ClaudeCodeRunner {
     // Priority: 1. Configured apiKey  2. Process env ANTHROPIC_API_KEY  3. Process env ANTHROPIC_AUTH_TOKEN
     const apiKey = this.config.apiKey || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
     if (apiKey) {
+      // Set ANTHROPIC_API_KEY for standard Anthropic API
       env.ANTHROPIC_API_KEY = apiKey;
       // Also set AUTH_TOKEN for compatibility with z.ai format
-      if (process.env.ANTHROPIC_AUTH_TOKEN) {
-        env.ANTHROPIC_AUTH_TOKEN = apiKey;
-      }
+      env.ANTHROPIC_AUTH_TOKEN = apiKey;
     }
 
     if (this.config.baseUrl) {

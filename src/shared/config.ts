@@ -9,6 +9,7 @@ export interface ClaudeConfig {
   env?: {
     ANTHROPIC_BASE_URL?: string;
     ANTHROPIC_API_KEY?: string;
+    ANTHROPIC_AUTH_TOKEN?: string;
   };
 }
 

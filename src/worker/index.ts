@@ -54,7 +54,7 @@ export class Worker {
     // Initialize Claude runner with current config
     const currentConfig = this.configManager.getCurrentConfig();
     this.claude = new ClaudeCodeRunner({
-      apiKey: currentConfig.apiKey || currentConfig.env?.ANTHROPIC_API_KEY,
+      apiKey: currentConfig.apiKey || currentConfig.env?.ANTHROPIC_API_KEY || currentConfig.env?.ANTHROPIC_AUTH_TOKEN,
       baseUrl: currentConfig.env?.ANTHROPIC_BASE_URL,
       model: currentConfig.model
     });

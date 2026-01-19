@@ -74,8 +74,10 @@ export class Director {
 
     // Initialize Claude runner with current config
     const currentConfig = this.configManager.getCurrentConfig();
+    const apiKey = currentConfig.apiKey || currentConfig.env?.ANTHROPIC_API_KEY || currentConfig.env?.ANTHROPIC_AUTH_TOKEN;
+    console.log('Director config:', JSON.stringify({ apiKey: apiKey?.substring(0, 10) + '...', baseUrl: currentConfig.env?.ANTHROPIC_BASE_URL }));
     this.claude = new ClaudeCodeRunner({
-      apiKey: currentConfig.apiKey || currentConfig.env?.ANTHROPIC_API_KEY,
+      apiKey,
       baseUrl: currentConfig.env?.ANTHROPIC_BASE_URL,
       model: currentConfig.model
     });
