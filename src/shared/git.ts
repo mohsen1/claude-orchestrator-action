@@ -70,7 +70,21 @@ export const GitOperations = {
    */
   async checkout(branchName: string): Promise<void> {
     try {
+      // Stash any local changes first to allow clean checkout
+      try {
+        await execa('git', ['stash', '--include-untracked']);
+      } catch {
+        // Stash might fail if nothing to stash, that's ok
+      }
+      
       await execa('git', ['checkout', branchName]);
+      
+      // Try to pop stash if there was one
+      try {
+        await execa('git', ['stash', 'pop']);
+      } catch {
+        // Pop might fail if stash was empty, that's ok
+      }
     } catch (error) {
       throw new Error(
         `Failed to checkout branch ${branchName}: ${(error as Error).message}`
