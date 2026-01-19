@@ -126,6 +126,13 @@ export const GitOperations = {
       await execa('git', ['commit', '-m', message]);
 
       // Push (to specific branch if provided as string, otherwise push current HEAD)
+      // First try to pull to incorporate any remote changes (e.g., from merged PRs)
+      try {
+        await execa('git', ['pull', '--rebase', 'origin', 'HEAD']);
+      } catch {
+        // Pull might fail if branch doesn't exist remotely yet, that's OK
+      }
+      
       if (typeof branchOrFiles === 'string') {
         await execa('git', ['push', '-u', 'origin', branchOrFiles]);
       } else {
