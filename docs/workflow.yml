@@ -8,15 +8,32 @@
 #     Example: [{"env":{"ANTHROPIC_AUTH_TOKEN":"your-key","ANTHROPIC_BASE_URL":"https://api.z.ai/api/anthropic"}}]
 #   - CCO_PAT: GitHub PAT with repo permissions
 #
-# Then add the 'orchestrator' label to any issue to trigger!
+# Triggers:
+#   - Add 'orchestrator' label to an issue to start
+#   - System wakes up on PR events and reviews automatically
 
 name: Claude Orchestrator
 
 on:
+  # Start orchestration when issue is labeled
   issues:
     types: [labeled]
+  
+  # Wake up when PR is merged (to continue work)
+  pull_request:
+    types: [closed]
+  
+  # Wake up when review is submitted
   pull_request_review:
     types: [submitted]
+  
+  # Manual trigger for recovery/debugging
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to check/resume'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -24,24 +41,56 @@ permissions:
   pull-requests: write
 
 jobs:
-  # Main orchestration - triggered by adding 'orchestrator' label to an issue
-  orchestrate:
+  # Start new orchestration when issue is labeled
+  start:
     if: github.event_name == 'issues' && github.event.label.name == 'orchestrator'
     uses: mohsen1/claude-orchestrator-action/.github/workflows/orchestrate.yml@main
     with:
+      event_type: 'issue_labeled'
       issue_number: ${{ github.event.issue.number }}
-      # Optional: customize these settings
-      # max_ems: '3'                  # Maximum Engineering Managers (default: 3)
-      # max_workers_per_em: '3'       # Maximum workers per EM (default: 3)
-      # review_wait_minutes: '5'      # Minutes to wait for human review (default: 5)
     secrets:
       CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
       CCO_PAT: ${{ secrets.CCO_PAT }}
 
-  # Review handler - triggered when changes are requested on CCO PRs
-  handle-review:
-    if: github.event_name == 'pull_request_review'
-    uses: mohsen1/claude-orchestrator-action/.github/workflows/review-handler.yml@main
+  # Continue work when PR is merged (only for cco/* branches)
+  on-pr-merged:
+    if: |
+      github.event_name == 'pull_request' && 
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'cco/')
+    uses: mohsen1/claude-orchestrator-action/.github/workflows/orchestrate.yml@main
+    with:
+      event_type: 'pull_request_merged'
+      pr_number: ${{ github.event.pull_request.number }}
+      branch: ${{ github.event.pull_request.head.ref }}
+    secrets:
+      CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
+      CCO_PAT: ${{ secrets.CCO_PAT }}
+
+  # Handle review (only for cco/* branches with changes_requested)
+  on-review:
+    if: |
+      github.event_name == 'pull_request_review' && 
+      github.event.review.state == 'changes_requested' &&
+      startsWith(github.event.pull_request.head.ref, 'cco/')
+    uses: mohsen1/claude-orchestrator-action/.github/workflows/orchestrate.yml@main
+    with:
+      event_type: 'pull_request_review'
+      pr_number: ${{ github.event.pull_request.number }}
+      branch: ${{ github.event.pull_request.head.ref }}
+      review_state: ${{ github.event.review.state }}
+      review_body: ${{ github.event.review.body }}
+    secrets:
+      CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
+      CCO_PAT: ${{ secrets.CCO_PAT }}
+
+  # Manual trigger for recovery
+  manual:
+    if: github.event_name == 'workflow_dispatch'
+    uses: mohsen1/claude-orchestrator-action/.github/workflows/orchestrate.yml@main
+    with:
+      event_type: 'workflow_dispatch'
+      issue_number: ${{ inputs.issue_number }}
     secrets:
       CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
       CCO_PAT: ${{ secrets.CCO_PAT }}
