@@ -298,10 +298,22 @@ export const GitOperations = {
     async push(branchName) {
         try {
             if (branchName) {
-                await execa('git', ['push', '-u', 'origin', branchName]);
+                try {
+                    await execa('git', ['push', '-u', 'origin', branchName]);
+                }
+                catch {
+                    // If normal push fails, use force-with-lease (safe force push)
+                    await execa('git', ['push', '--force-with-lease', '-u', 'origin', branchName]);
+                }
             }
             else {
-                await execa('git', ['push']);
+                try {
+                    await execa('git', ['push', '-u', 'origin', 'HEAD']);
+                }
+                catch {
+                    // If normal push fails, use force-with-lease (safe force push)
+                    await execa('git', ['push', '--force-with-lease', '-u', 'origin', 'HEAD']);
+                }
             }
         }
         catch (error) {
