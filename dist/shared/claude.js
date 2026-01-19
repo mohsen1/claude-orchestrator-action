@@ -36,11 +36,18 @@ export class ClaudeCodeRunner {
         const timeoutMs = parseInt(process.env.API_TIMEOUT_MS || '300000', 10);
         console.log(`Running Claude CLI with timeout: ${timeoutMs}ms`);
         console.log(`API base URL: ${env.ANTHROPIC_BASE_URL || 'default'}`);
+        console.log(`API key set: ${env.ANTHROPIC_API_KEY ? 'yes (length: ' + env.ANTHROPIC_API_KEY.length + ')' : 'no'}`);
+        console.log(`Auth token set: ${env.ANTHROPIC_AUTH_TOKEN ? 'yes' : 'no'}`);
+        console.log(`Task length: ${task.length} chars`);
         try {
-            const result = await execa('claude', ['-p', '--output-format', 'text', task], {
+            const args = ['-p', '--output-format', 'text', '--verbose'];
+            console.log(`Claude CLI args: ${args.join(' ')}`);
+            console.log(`Sending task via stdin (${task.length} chars)`);
+            const result = await execa('claude', args, {
                 env,
                 timeout: timeoutMs,
-                reject: false
+                reject: false,
+                input: task
             });
             if (result.timedOut) {
                 console.error('Claude CLI timed out after', timeoutMs, 'ms');
