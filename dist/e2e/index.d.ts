@@ -1,8 +1,17 @@
 /**
- * End-to-end orchestrator that runs the full hierarchy inline
- * Director -> EM -> Workers all in one workflow run
+ * End-to-end orchestrator with hierarchical PR structure
  *
- * Uses Claude Agent SDK for proper file modifications
+ * Branch/PR Hierarchy:
+ * main
+ *   └── cco/issue-X-slug (Director's work branch)
+ *         ├── cco/issue-X-em-1 (EM-1's branch)
+ *         │     ├── cco/issue-X-em-1-w-1 → PR to EM-1 branch
+ *         │     └── cco/issue-X-em-1-w-2 → PR to EM-1 branch
+ *         │     └── EM-1 PR → work branch
+ *         └── cco/issue-X-em-2 (EM-2's branch)
+ *               └── Workers → PRs to EM-2
+ *               └── EM-2 PR → work branch
+ *         └── Final PR: work branch → main
  */
 import type { ClaudeConfig } from '../shared/config.js';
 export interface E2EContext {
@@ -29,14 +38,20 @@ export declare class E2EOrchestrator {
     private claude;
     private sdkRunner;
     private workBranch;
+    private issueSlug;
     constructor(context: E2EContext);
     run(): Promise<void>;
     private createWorkBranch;
+    private getEMBranch;
+    private getWorkerBranch;
+    private processEM;
+    private processWorker;
+    private buildWorkerPrompt;
+    private createWorkerPullRequest;
+    private createEMPullRequest;
+    private createFinalPR;
     private analyzeIssue;
     private breakdownEMTask;
-    private executeWorkerTask;
-    private commitAndPush;
-    private createPullRequest;
     private postSuccessComment;
     private postFailureComment;
 }

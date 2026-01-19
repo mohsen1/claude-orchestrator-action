@@ -277,23 +277,30 @@ export class GitHubClient {
   /**
    * Merge a pull request
    * @param prNumber - PR number
-   * @param commitTitle - Merge commit title
-   * @param commitMessage - Merge commit message
+   * @param commitTitle - Merge commit title (optional)
+   * @param commitMessage - Merge commit message (optional)
    * @returns void
    */
   async mergePullRequest(
     prNumber: number,
-    commitTitle: string,
+    commitTitle?: string,
     commitMessage?: string
   ): Promise<void> {
     try {
-      await this.octokit.rest.pulls.merge({
+      const mergeOptions: Parameters<typeof this.octokit.rest.pulls.merge>[0] = {
         owner: this.getRepo().owner,
         repo: this.getRepo().repo,
-        pull_number: prNumber,
-        commit_title: commitTitle,
-        commit_message: commitMessage || ''
-      });
+        pull_number: prNumber
+      };
+      
+      if (commitTitle) {
+        mergeOptions.commit_title = commitTitle;
+      }
+      if (commitMessage) {
+        mergeOptions.commit_message = commitMessage;
+      }
+      
+      await this.octokit.rest.pulls.merge(mergeOptions);
     } catch (error) {
       throw new Error(
         `Failed to merge PR #${prNumber}: ${(error as Error).message}`

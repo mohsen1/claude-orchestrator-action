@@ -33,14 +33,24 @@ export declare const GitOperations: {
      * @param branchName - Name of the branch to checkout
      * @returns void
      */
+    checkout(branchName: string): Promise<void>;
+    /**
+     * @deprecated Use checkout instead
+     */
     checkoutBranch(branchName: string): Promise<void>;
+    /**
+     * Pull latest changes from remote
+     * @param branchName - Branch name to pull (optional)
+     * @returns void
+     */
+    pull(branchName?: string): Promise<void>;
     /**
      * Add files, commit, and push
      * @param message - Commit message
-     * @param files - Specific files to add (optional, defaults to all)
+     * @param branchOrFiles - Branch name to push, or specific files to add
      * @returns void
      */
-    commitAndPush(message: string, files?: string[]): Promise<void>;
+    commitAndPush(message: string, branchOrFiles?: string | string[]): Promise<void>;
     /**
      * Attempt to rebase onto a target branch
      * @param targetBranch - Branch to rebase onto

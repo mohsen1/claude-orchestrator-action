@@ -1,8 +1,17 @@
 /**
- * End-to-end orchestrator that runs the full hierarchy inline
- * Director -> EM -> Workers all in one workflow run
+ * End-to-end orchestrator with hierarchical PR structure
  *
- * Uses Claude Agent SDK for proper file modifications
+ * Branch/PR Hierarchy:
+ * main
+ *   └── cco/issue-X-slug (Director's work branch)
+ *         ├── cco/issue-X-em-1 (EM-1's branch)
+ *         │     ├── cco/issue-X-em-1-w-1 → PR to EM-1 branch
+ *         │     └── cco/issue-X-em-1-w-2 → PR to EM-1 branch
+ *         │     └── EM-1 PR → work branch
+ *         └── cco/issue-X-em-2 (EM-2's branch)
+ *               └── Workers → PRs to EM-2
+ *               └── EM-2 PR → work branch
+ *         └── Final PR: work branch → main
  */
 import { GitHubClient } from '../shared/github.js';
 import { slugify, getDirectorBranch } from '../shared/branches.js';
@@ -18,6 +27,7 @@ export class E2EOrchestrator {
     claude;
     sdkRunner;
     workBranch = '';
+    issueSlug = '';
     constructor(context) {
         this.context = context;
         this.github = new GitHubClient(context.token, context.repo);
@@ -39,44 +49,28 @@ export class E2EOrchestrator {
         });
     }
     async run() {
-        console.log('Starting E2E Orchestration...');
+        console.log('Starting E2E Orchestration with Hierarchical PRs...');
         console.log(`Issue #${this.context.issue.number}: ${this.context.issue.title}`);
         try {
-            // Step 1: Create work branch
+            // Step 1: Create work branch (Director's branch)
             await this.createWorkBranch();
             // Step 2: Analyze issue and get EM tasks
             console.log('\n=== Phase 1: Director Analysis ===');
             const emTasks = await this.analyzeIssue();
             console.log(`Director identified ${emTasks.length} EM tasks`);
-            // Step 3: For each EM, break down into worker tasks and execute
-            const allResults = [];
+            // Step 3: Process each EM with their own branch and worker PRs
+            const emResults = [];
             for (const emTask of emTasks) {
                 console.log(`\n=== Phase 2: EM-${emTask.em_id} - ${emTask.focus_area} ===`);
-                // Get worker tasks for this EM
-                const workerTasks = await this.breakdownEMTask(emTask);
-                console.log(`EM-${emTask.em_id} assigned ${workerTasks.length} worker tasks`);
-                // Execute each worker task using SDK (with file modifications)
-                for (const workerTask of workerTasks) {
-                    console.log(`\n--- Worker-${workerTask.worker_id}: ${workerTask.task.substring(0, 50)}... ---`);
-                    const result = await this.executeWorkerTask(emTask.em_id, workerTask);
-                    allResults.push(result);
-                    if (result.success) {
-                        console.log(`Worker-${workerTask.worker_id} completed. Files: ${result.filesModified.join(', ') || 'none'}`);
-                    }
-                    else {
-                        console.error(`Worker-${workerTask.worker_id} failed: ${result.error}`);
-                    }
-                }
+                const emResult = await this.processEM(emTask);
+                emResults.push(emResult);
             }
-            // Step 4: Commit and push all changes
-            console.log('\n=== Phase 3: Committing Changes ===');
-            await this.commitAndPush();
-            // Step 5: Create PR to main
-            console.log('\n=== Phase 4: Creating PR ===');
-            const pr = await this.createPullRequest(emTasks, allResults);
-            console.log(`PR created: ${pr.html_url}`);
-            // Step 6: Update issue with success status
-            await this.postSuccessComment(pr);
+            // Step 4: Create final PR from work branch to main
+            console.log('\n=== Phase 3: Creating Final PR ===');
+            const finalPr = await this.createFinalPR(emTasks, emResults);
+            console.log(`Final PR created: ${finalPr.html_url}`);
+            // Step 5: Update issue with success status
+            await this.postSuccessComment(finalPr, emResults);
             console.log('\nE2E Orchestration completed successfully!');
         }
         catch (error) {
@@ -86,12 +80,248 @@ export class E2EOrchestrator {
         }
     }
     async createWorkBranch() {
-        const slug = slugify(this.context.issue.title);
-        this.workBranch = getDirectorBranch(this.context.issue.number, slug);
+        this.issueSlug = slugify(this.context.issue.title);
+        this.workBranch = getDirectorBranch(this.context.issue.number, this.issueSlug);
         console.log(`Creating work branch: ${this.workBranch}`);
         await GitOperations.createBranch(this.workBranch, 'main');
         await GitOperations.push(this.workBranch);
         console.log('Work branch created and pushed');
+    }
+    getEMBranch(emId) {
+        return `cco/issue-${this.context.issue.number}-em-${emId}`;
+    }
+    getWorkerBranch(emId, workerId) {
+        return `cco/issue-${this.context.issue.number}-em-${emId}-w-${workerId}`;
+    }
+    async processEM(emTask) {
+        const emBranch = this.getEMBranch(emTask.em_id);
+        // Create EM branch from work branch
+        console.log(`Creating EM branch: ${emBranch}`);
+        await GitOperations.checkout(this.workBranch);
+        await GitOperations.createBranch(emBranch, this.workBranch);
+        await GitOperations.push(emBranch);
+        // Get worker tasks for this EM
+        const workerTasks = await this.breakdownEMTask(emTask);
+        console.log(`EM-${emTask.em_id} assigned ${workerTasks.length} worker tasks`);
+        // Process each worker with their own branch and PR
+        const workerResults = [];
+        for (const workerTask of workerTasks) {
+            console.log(`\n--- Worker-${workerTask.worker_id}: ${workerTask.task.substring(0, 50)}... ---`);
+            const workerResult = await this.processWorker(emTask.em_id, emBranch, workerTask);
+            workerResults.push(workerResult);
+            if (workerResult.success) {
+                console.log(`Worker-${workerTask.worker_id} PR created: ${workerResult.prUrl}`);
+            }
+            else {
+                console.error(`Worker-${workerTask.worker_id} failed: ${workerResult.error}`);
+            }
+        }
+        // Merge successful worker PRs into EM branch
+        for (const workerResult of workerResults) {
+            if (workerResult.success && workerResult.prNumber) {
+                try {
+                    console.log(`Merging Worker-${workerResult.workerId} PR #${workerResult.prNumber}`);
+                    await this.github.mergePullRequest(workerResult.prNumber);
+                }
+                catch (error) {
+                    console.error(`Failed to merge Worker PR #${workerResult.prNumber}:`, error);
+                }
+            }
+        }
+        // Pull latest EM branch after merges
+        await GitOperations.checkout(emBranch);
+        await GitOperations.pull(emBranch);
+        // Create EM PR to work branch
+        const emPr = await this.createEMPullRequest(emTask, emBranch, workerResults);
+        return {
+            emId: emTask.em_id,
+            focusArea: emTask.focus_area,
+            success: workerResults.some(r => r.success),
+            workerResults,
+            branch: emBranch,
+            prNumber: emPr.number,
+            prUrl: emPr.html_url
+        };
+    }
+    async processWorker(emId, emBranch, workerTask) {
+        const workerBranch = this.getWorkerBranch(emId, workerTask.worker_id);
+        try {
+            // Create worker branch from EM branch
+            console.log(`Creating worker branch: ${workerBranch}`);
+            await GitOperations.checkout(emBranch);
+            await GitOperations.createBranch(workerBranch, emBranch);
+            // Execute the task
+            const prompt = this.buildWorkerPrompt(workerTask);
+            const result = await this.sdkRunner.executeTask(prompt);
+            if (!result.success) {
+                return {
+                    emId,
+                    workerId: workerTask.worker_id,
+                    success: false,
+                    error: result.error || 'Unknown error',
+                    filesModified: [],
+                    branch: workerBranch
+                };
+            }
+            // Commit and push changes
+            const hasChanges = await GitOperations.hasUncommittedChanges();
+            if (hasChanges) {
+                await GitOperations.commitAndPush(`feat(em-${emId}/worker-${workerTask.worker_id}): ${workerTask.task.substring(0, 50)}\n\nAutomated implementation by Claude Code Orchestrator`, workerBranch);
+            }
+            else {
+                // Push branch even if no changes (for PR creation)
+                await GitOperations.push(workerBranch);
+            }
+            // Get modified files
+            const filesModified = await GitOperations.getModifiedFiles();
+            // Create PR from worker branch to EM branch
+            const pr = await this.createWorkerPullRequest(emId, workerTask, workerBranch, emBranch, filesModified);
+            console.log(`Worker output (first 200 chars): ${result.output.substring(0, 200)}`);
+            return {
+                emId,
+                workerId: workerTask.worker_id,
+                success: true,
+                filesModified,
+                branch: workerBranch,
+                prNumber: pr.number,
+                prUrl: pr.html_url
+            };
+        }
+        catch (error) {
+            return {
+                emId,
+                workerId: workerTask.worker_id,
+                success: false,
+                error: error.message,
+                filesModified: [],
+                branch: workerBranch
+            };
+        }
+    }
+    buildWorkerPrompt(workerTask) {
+        return `You are a developer implementing a specific task. Make the actual code changes.
+
+**Your Task:** ${workerTask.task}
+
+**Files to work with:** ${workerTask.files.length > 0 ? workerTask.files.join(', ') : 'Create whatever files are needed'}
+
+**Context - Original Issue:**
+${this.context.issue.body}
+
+**Instructions:**
+1. Implement the task completely
+2. Create or modify the necessary files
+3. Write clean, production-ready code
+4. Include necessary imports and exports
+5. Do NOT create test files unless specifically asked
+
+Implement this task now.`;
+    }
+    async createWorkerPullRequest(emId, workerTask, workerBranch, emBranch, filesModified) {
+        const body = `## Worker Implementation
+
+**EM:** EM-${emId}
+**Worker:** Worker-${workerTask.worker_id}
+
+### Task
+${workerTask.task}
+
+### Files Changed
+${filesModified.map(f => `- \`${f}\``).join('\n') || 'No files tracked (check diff)'}
+
+---
+*Automated by Claude Code Orchestrator*
+*This PR will be auto-merged into the EM branch*`;
+        const pr = await this.github.createPullRequest({
+            title: `[EM-${emId}/W-${workerTask.worker_id}] ${workerTask.task.substring(0, 60)}`,
+            body,
+            head: workerBranch,
+            base: emBranch
+        });
+        return { number: pr.number, html_url: pr.html_url };
+    }
+    async createEMPullRequest(emTask, emBranch, workerResults) {
+        const successCount = workerResults.filter(r => r.success).length;
+        const failCount = workerResults.filter(r => !r.success).length;
+        const allFiles = [...new Set(workerResults.flatMap(r => r.filesModified))];
+        const body = `## EM-${emTask.em_id}: ${emTask.focus_area}
+
+### Task
+${emTask.task}
+
+### Worker Summary
+- **Total Workers:** ${workerResults.length}
+- **Succeeded:** ${successCount}
+- **Failed:** ${failCount}
+
+### Worker PRs
+${workerResults.map(r => `- Worker-${r.workerId}: ${r.success ? `Merged (PR #${r.prNumber})` : `Failed: ${r.error}`}`).join('\n')}
+
+### Files Changed
+${allFiles.map(f => `- \`${f}\``).join('\n') || 'No files tracked (check diff)'}
+
+---
+*Automated by Claude Code Orchestrator*`;
+        const pr = await this.github.createPullRequest({
+            title: `[EM-${emTask.em_id}] ${emTask.focus_area}: ${emTask.task.substring(0, 50)}`,
+            body,
+            head: emBranch,
+            base: this.workBranch
+        });
+        return { number: pr.number, html_url: pr.html_url };
+    }
+    async createFinalPR(emTasks, emResults) {
+        // First merge all EM PRs
+        for (const emResult of emResults) {
+            if (emResult.prNumber) {
+                try {
+                    console.log(`Merging EM-${emResult.emId} PR #${emResult.prNumber}`);
+                    await this.github.mergePullRequest(emResult.prNumber);
+                }
+                catch (error) {
+                    console.error(`Failed to merge EM PR #${emResult.prNumber}:`, error);
+                }
+            }
+        }
+        // Pull latest work branch
+        await GitOperations.checkout(this.workBranch);
+        await GitOperations.pull(this.workBranch);
+        const totalWorkers = emResults.reduce((sum, em) => sum + em.workerResults.length, 0);
+        const successWorkers = emResults.reduce((sum, em) => sum + em.workerResults.filter(w => w.success).length, 0);
+        const allFiles = [...new Set(emResults.flatMap(em => em.workerResults.flatMap(w => w.filesModified)))];
+        const body = `## Automated Implementation for Issue #${this.context.issue.number}
+
+**Issue:** ${this.context.issue.title}
+
+### Summary
+
+This PR was automatically generated by the Claude Code Orchestrator using a hierarchical PR structure.
+
+- **EM Tasks:** ${emTasks.length}
+- **Total Workers:** ${totalWorkers} (${successWorkers} succeeded)
+- **Files Modified:** ${allFiles.length}
+
+### Hierarchy
+
+${emResults.map(em => `
+#### EM-${em.emId}: ${em.focusArea}
+- **PR:** #${em.prNumber}
+- **Workers:** ${em.workerResults.length}
+${em.workerResults.map(w => `  - Worker-${w.workerId}: ${w.success ? `PR #${w.prNumber}` : `Failed: ${w.error}`}`).join('\n')}
+`).join('\n')}
+
+### Files Changed
+${allFiles.map(f => `- \`${f}\``).join('\n') || 'Check individual PRs for changes'}
+
+---
+Closes #${this.context.issue.number}`;
+        const pr = await this.github.createPullRequest({
+            title: `feat: ${this.context.issue.title}`,
+            body,
+            head: this.workBranch,
+            base: 'main'
+        });
+        return { number: pr.number, html_url: pr.html_url };
     }
     async analyzeIssue() {
         const maxEms = this.context.options?.maxEms || 3;
@@ -184,106 +414,19 @@ Break this down into specific, actionable worker tasks. Each worker will impleme
                 }];
         }
     }
-    async executeWorkerTask(_emId, workerTask) {
-        const prompt = `You are a developer implementing a specific task. Make the actual code changes.
-
-**Your Task:** ${workerTask.task}
-
-**Files to work with:** ${workerTask.files.length > 0 ? workerTask.files.join(', ') : 'Create whatever files are needed'}
-
-**Context - Original Issue:**
-${this.context.issue.body}
-
-**Instructions:**
-1. Implement the task completely
-2. Create or modify the necessary files
-3. Write clean, production-ready code
-4. Include necessary imports and exports
-5. Do NOT create test files unless specifically asked
-
-Implement this task now.`;
-        try {
-            // Use SDK runner for file modifications
-            const result = await this.sdkRunner.executeTask(prompt);
-            if (!result.success) {
-                return {
-                    success: false,
-                    error: result.error || 'Unknown error',
-                    filesModified: []
-                };
-            }
-            // Get modified files from git
-            const filesModified = await GitOperations.getModifiedFiles();
-            console.log(`Worker output (first 200 chars): ${result.output.substring(0, 200)}`);
-            return {
-                success: true,
-                filesModified
-            };
-        }
-        catch (error) {
-            return {
-                success: false,
-                error: error.message,
-                filesModified: []
-            };
-        }
-    }
-    async commitAndPush() {
-        const hasChanges = await GitOperations.hasUncommittedChanges();
-        if (!hasChanges) {
-            console.log('No changes to commit');
-            return;
-        }
-        const files = await GitOperations.getModifiedFiles();
-        console.log(`Committing ${files.length} files: ${files.join(', ')}`);
-        await GitOperations.commitAndPush(`feat: implement issue #${this.context.issue.number}
-
-${this.context.issue.title}
-
-Automated implementation by Claude Code Orchestrator`);
-        console.log('Changes committed and pushed');
-    }
-    async createPullRequest(emTasks, results) {
-        const successCount = results.filter(r => r.success).length;
-        const failCount = results.filter(r => !r.success).length;
-        const allFiles = [...new Set(results.flatMap(r => r.filesModified))];
-        const body = `## Automated Implementation for Issue #${this.context.issue.number}
-
-**Issue:** ${this.context.issue.title}
-
-### Summary
-
-This PR was automatically generated by the Claude Code Orchestrator.
-
-- **EM Tasks:** ${emTasks.length}
-- **Worker Tasks:** ${results.length} (${successCount} succeeded, ${failCount} failed)
-- **Files Modified:** ${allFiles.length}
-
-### Task Breakdown
-
-${emTasks.map(em => `#### EM-${em.em_id}: ${em.focus_area}\n${em.task}`).join('\n\n')}
-
-### Files Changed
-
-${allFiles.map(f => `- \`${f}\``).join('\n') || 'No files changed'}
-
----
-Closes #${this.context.issue.number}`;
-        const pr = await this.github.createPullRequest({
-            title: `feat: ${this.context.issue.title}`,
-            body,
-            head: this.workBranch,
-            base: 'main'
-        });
-        return { number: pr.number, html_url: pr.html_url };
-    }
-    async postSuccessComment(pr) {
+    async postSuccessComment(pr, emResults) {
         const comment = `## Orchestration Complete
 
-The Claude Code Orchestrator has finished implementing this issue.
+The Claude Code Orchestrator has finished implementing this issue using a hierarchical PR structure.
 
-**Pull Request:** #${pr.number}
+**Final PR:** #${pr.number}
 ${pr.html_url}
+
+### PR Hierarchy
+${emResults.map(em => `
+- **EM-${em.emId} (${em.focusArea}):** PR #${em.prNumber}
+${em.workerResults.map(w => `  - Worker-${w.workerId}: PR #${w.prNumber || 'N/A'}`).join('\n')}
+`).join('')}
 
 Please review the changes and merge when ready.
 

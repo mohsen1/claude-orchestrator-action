@@ -100,11 +100,11 @@ export declare class GitHubClient {
     /**
      * Merge a pull request
      * @param prNumber - PR number
-     * @param commitTitle - Merge commit title
-     * @param commitMessage - Merge commit message
+     * @param commitTitle - Merge commit title (optional)
+     * @param commitMessage - Merge commit message (optional)
      * @returns void
      */
-    mergePullRequest(prNumber: number, commitTitle: string, commitMessage?: string): Promise<void>;
+    mergePullRequest(prNumber: number, commitTitle?: string, commitMessage?: string): Promise<void>;
     /**
      * List pull requests
      * @param head - Filter by head branch (optional)

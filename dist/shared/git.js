@@ -47,7 +47,7 @@ export const GitOperations = {
      * @param branchName - Name of the branch to checkout
      * @returns void
      */
-    async checkoutBranch(branchName) {
+    async checkout(branchName) {
         try {
             await execa('git', ['checkout', branchName]);
         }
@@ -56,26 +56,55 @@ export const GitOperations = {
         }
     },
     /**
-     * Add files, commit, and push
-     * @param message - Commit message
-     * @param files - Specific files to add (optional, defaults to all)
+     * @deprecated Use checkout instead
+     */
+    async checkoutBranch(branchName) {
+        return this.checkout(branchName);
+    },
+    /**
+     * Pull latest changes from remote
+     * @param branchName - Branch name to pull (optional)
      * @returns void
      */
-    async commitAndPush(message, files) {
+    async pull(branchName) {
+        try {
+            if (branchName) {
+                await execa('git', ['pull', 'origin', branchName]);
+            }
+            else {
+                await execa('git', ['pull']);
+            }
+        }
+        catch (error) {
+            throw new Error(`Failed to pull branch: ${error.message}`);
+        }
+    },
+    /**
+     * Add files, commit, and push
+     * @param message - Commit message
+     * @param branchOrFiles - Branch name to push, or specific files to add
+     * @returns void
+     */
+    async commitAndPush(message, branchOrFiles) {
         try {
             // Ensure git identity is configured before committing
             await this.configureIdentity();
             // Stage files
-            if (files && files.length > 0) {
-                await execa('git', ['add', ...files]);
+            if (Array.isArray(branchOrFiles) && branchOrFiles.length > 0) {
+                await execa('git', ['add', ...branchOrFiles]);
             }
             else {
                 await execa('git', ['add', '-A']);
             }
             // Commit
             await execa('git', ['commit', '-m', message]);
-            // Push
-            await execa('git', ['push']);
+            // Push (to specific branch if provided as string)
+            if (typeof branchOrFiles === 'string') {
+                await execa('git', ['push', '-u', 'origin', branchOrFiles]);
+            }
+            else {
+                await execa('git', ['push']);
+            }
         }
         catch (error) {
             throw new Error(`Failed to commit and push: ${error.message}`);
