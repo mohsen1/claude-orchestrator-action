@@ -199,9 +199,58 @@ Director workflow now supports being called as a reusable workflow, enabling oth
 
 ## Remaining Issues
 
-### z.ai API Blocked from GitHub Actions
-The z.ai API endpoint (`https://api.z.ai/api/anthropic`) is **NOT accessible** from GitHub Actions runners. This is likely due to:
-- IP-based restrictions on z.ai
-- GitHub Actions egress IP ranges being blocked
+### z.ai API Connection Issues from GitHub Actions
 
-**Solution:** Use Anthropic's official API endpoint (`https://api.anthropic.com`) with a standard `ANTHROPIC_API_KEY` for GitHub Actions.
+The z.ai API endpoint may fail from GitHub Actions for several reasons (NOT necessarily an intentional block):
+
+#### Possible Causes:
+
+1. **Endpoint Mismatch (Most Likely)**
+   - Current config uses: `https://api.z.ai/api/anthropic`
+   - z.ai has different endpoints:
+     - General Endpoint: `https://api.z.ai/api/paas/v4`
+     - Coding Plan Endpoint: `https://api.z.ai/api/coding/paas/v4`
+   - Using the wrong endpoint for your plan type causes "silent fail" (dropped connection or 401)
+
+2. **Dynamic IP Issues**
+   - GitHub-hosted runners use dynamic IPs from Azure
+   - If another user on the same IP range violated ToS, the IP might be temporarily flagged
+   - Fix: Use self-hosted runner with static IP
+
+3. **OAuth Conflict (for MCP/OpenCode tools)**
+   - December 2025 update introduced OAuth auto-detection
+   - May break standard API key auth
+   - Fix: Set `"oauth": false` in config
+
+#### Diagnostic Steps Added:
+The workflow now includes a network connectivity check that tests:
+- `api.anthropic.com` (standard Anthropic)
+- `api.z.ai/api/paas/v4` (z.ai general)
+- `api.z.ai/api/coding/paas/v4` (z.ai coding plan)
+- Runner's public IP
+
+#### Solutions:
+
+**Option 1:** Fix the z.ai endpoint in CLAUDE_CONFIGS:
+```json
+[
+  {
+    "env": {
+      "ANTHROPIC_AUTH_TOKEN": "your-z.ai-key",
+      "ANTHROPIC_BASE_URL": "https://api.z.ai/api/coding/paas/v4"
+    }
+  }
+]
+```
+
+**Option 2:** Use Anthropic's official API:
+```json
+[
+  {
+    "env": {
+      "ANTHROPIC_API_KEY": "sk-ant-api03-your-key",
+      "ANTHROPIC_BASE_URL": "https://api.anthropic.com"
+    }
+  }
+]
+```
