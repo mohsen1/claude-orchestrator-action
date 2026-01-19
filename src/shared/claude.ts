@@ -144,19 +144,20 @@ export class ClaudeCodeRunner {
     console.log(`Task length: ${task.length} chars`);
 
     try {
+      // Use --dangerously-skip-permissions to auto-approve file writes
+      // NO -p flag - that prevents file modifications
+      // Use stdin for the prompt
       const args = [
         '--dangerously-skip-permissions',
-        '--output-format', 'text',
-        '--verbose',
-        '-p',
-        task
+        '--output-format', 'stream-json'
       ];
-      console.log(`Claude CLI args: --dangerously-skip-permissions --output-format text --verbose -p [task]`);
+      console.log(`Claude CLI args: ${args.join(' ')} (task via stdin)`);
       
       const result = await execa('claude', args, {
         env,
         timeout: timeoutMs,
-        reject: false
+        reject: false,
+        input: task
       });
 
       if (result.timedOut) {
