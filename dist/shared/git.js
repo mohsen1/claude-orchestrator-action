@@ -99,31 +99,24 @@ export const GitOperations = {
             // Commit
             await execa('git', ['commit', '-m', message]);
             // Push (to specific branch if provided as string, otherwise push current HEAD)
-            // First try to pull to incorporate any remote changes (e.g., from merged PRs)
-            try {
-                // Fetch latest from origin
-                await execa('git', ['fetch', 'origin']);
-                // Try rebase first
-                await execa('git', ['pull', '--rebase', 'origin', 'HEAD']);
-            }
-            catch {
-                // If rebase fails, try to stash, pull, and reapply
+            // Use force-with-lease to safely push even if remote diverged (from merged PRs)
+            if (typeof branchOrFiles === 'string') {
                 try {
-                    const { stdout: currentBranch } = await execa('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
-                    await execa('git', ['stash']);
-                    await execa('git', ['pull', 'origin', currentBranch.trim(), '--allow-unrelated-histories']);
-                    await execa('git', ['stash', 'pop']);
+                    await execa('git', ['push', '-u', 'origin', branchOrFiles]);
                 }
                 catch {
-                    // Pull might fail if branch doesn't exist remotely yet, that's OK
+                    // If normal push fails, use force-with-lease (safe force push)
+                    await execa('git', ['push', '--force-with-lease', '-u', 'origin', branchOrFiles]);
                 }
             }
-            if (typeof branchOrFiles === 'string') {
-                await execa('git', ['push', '-u', 'origin', branchOrFiles]);
-            }
             else {
-                // Use origin HEAD to handle new branches without upstream
-                await execa('git', ['push', '-u', 'origin', 'HEAD']);
+                try {
+                    await execa('git', ['push', '-u', 'origin', 'HEAD']);
+                }
+                catch {
+                    // If normal push fails, use force-with-lease (safe force push)
+                    await execa('git', ['push', '--force-with-lease', '-u', 'origin', 'HEAD']);
+                }
             }
         }
         catch (error) {
