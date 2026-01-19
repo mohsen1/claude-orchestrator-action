@@ -45,11 +45,13 @@ async function main() {
 
   const maxEms = parseInt(process.env.MAX_EMS || '3', 10);
   const maxWorkersPerEm = parseInt(process.env.MAX_WORKERS_PER_EM || '3', 10);
+  const reviewWaitMinutes = parseInt(process.env.REVIEW_WAIT_MINUTES || '5', 10);
 
   console.log('E2E Orchestrator starting...');
   console.log(`  Repo: ${repoOwner}/${repoName}`);
   console.log(`  Issue: #${issueNumber} - ${issueTitle}`);
   console.log(`  Max EMs: ${maxEms}, Max Workers per EM: ${maxWorkersPerEm}`);
+  console.log(`  Review wait: ${reviewWaitMinutes} minutes`);
 
   const orchestrator = new E2EOrchestrator({
     repo: { owner: repoOwner, repo: repoName },
@@ -62,7 +64,8 @@ async function main() {
     configs,
     options: {
       maxEms,
-      maxWorkersPerEm
+      maxWorkersPerEm,
+      reviewWaitMinutes
     }
   });
 

@@ -38,6 +38,7 @@ export interface E2EContext {
   options?: {
     maxEms?: number;
     maxWorkersPerEm?: number;
+    reviewWaitMinutes?: number;
   };
 }
 
@@ -194,17 +195,9 @@ export class E2EOrchestrator {
       }
     }
 
-    // Merge successful worker PRs into EM branch
-    for (const workerResult of workerResults) {
-      if (workerResult.success && workerResult.prNumber) {
-        try {
-          console.log(`Merging Worker-${workerResult.workerId} PR #${workerResult.prNumber}`);
-          await this.github.mergePullRequest(workerResult.prNumber);
-        } catch (error) {
-          console.error(`Failed to merge Worker PR #${workerResult.prNumber}:`, error);
-        }
-      }
-    }
+    // Wait for reviews and handle them before merging
+    const reviewWaitMinutes = this.context.options?.reviewWaitMinutes ?? 5;
+    await this.waitForReviewsAndMerge(workerResults, reviewWaitMinutes);
 
     // Pull latest EM branch after merges
     await GitOperations.checkout(emBranch);
@@ -307,6 +300,201 @@ ${this.context.issue.body}
 5. Do NOT create test files unless specifically asked
 
 Implement this task now.`;
+  }
+
+  /**
+   * Wait for the configured review period, handle any reviews, then merge PRs
+   */
+  private async waitForReviewsAndMerge(workerResults: WorkerResult[], reviewWaitMinutes: number): Promise<void> {
+    const successfulWorkers = workerResults.filter(w => w.success && w.prNumber);
+    
+    if (successfulWorkers.length === 0) {
+      console.log('No successful worker PRs to merge');
+      return;
+    }
+
+    console.log(`\n=== Review Period: ${reviewWaitMinutes} minutes ===`);
+    console.log(`Waiting for human reviews on ${successfulWorkers.length} worker PRs...`);
+    console.log('PRs open for review:');
+    for (const worker of successfulWorkers) {
+      console.log(`  - Worker-${worker.workerId}: PR #${worker.prNumber} (${worker.prUrl})`);
+    }
+
+    const reviewWaitMs = reviewWaitMinutes * 60 * 1000;
+    const pollIntervalMs = 30 * 1000; // Check every 30 seconds
+    const startTime = Date.now();
+    const handledReviews = new Set<string>(); // Track handled reviews to avoid duplicates
+
+    while (Date.now() - startTime < reviewWaitMs) {
+      const elapsedMinutes = Math.floor((Date.now() - startTime) / 60000);
+      const remainingMinutes = reviewWaitMinutes - elapsedMinutes;
+      console.log(`\n[${elapsedMinutes}m/${reviewWaitMinutes}m] Checking for reviews... (${remainingMinutes}m remaining)`);
+
+      // Check each worker PR for reviews
+      for (const worker of successfulWorkers) {
+        if (!worker.prNumber) continue;
+
+        try {
+          const reviews = await this.github.getPullRequestReviews(worker.prNumber);
+          
+          for (const review of reviews) {
+            const reviewKey = `${worker.prNumber}-${review.id}`;
+            
+            if (handledReviews.has(reviewKey)) continue;
+            handledReviews.add(reviewKey);
+
+            console.log(`  Review on PR #${worker.prNumber} by ${review.user}: ${review.state}`);
+
+            if (review.state === 'CHANGES_REQUESTED') {
+              console.log(`  Addressing requested changes...`);
+              await this.handleReviewChangesRequested(worker, review.body);
+            } else if (review.state === 'APPROVED') {
+              console.log(`  PR #${worker.prNumber} approved by ${review.user}`);
+            } else if (review.state === 'COMMENTED' && review.body) {
+              console.log(`  Comment: "${review.body.substring(0, 100)}..."`);
+              // Optionally respond to comments
+            }
+          }
+
+          // Also check for inline review comments
+          const comments = await this.github.getPullRequestComments(worker.prNumber);
+          for (const comment of comments) {
+            const commentKey = `${worker.prNumber}-comment-${comment.id}`;
+            
+            if (handledReviews.has(commentKey)) continue;
+            handledReviews.add(commentKey);
+
+            console.log(`  Inline comment on ${comment.path} by ${comment.user}`);
+            await this.handleInlineComment(worker, comment);
+          }
+        } catch (error) {
+          console.error(`  Error checking reviews for PR #${worker.prNumber}:`, error);
+        }
+      }
+
+      // Wait before next poll
+      if (Date.now() - startTime < reviewWaitMs) {
+        await this.sleep(pollIntervalMs);
+      }
+    }
+
+    console.log(`\n=== Review period ended ===`);
+    console.log('Merging worker PRs...');
+
+    // Merge all successful worker PRs
+    for (const worker of successfulWorkers) {
+      if (!worker.prNumber) continue;
+      
+      try {
+        console.log(`Merging Worker-${worker.workerId} PR #${worker.prNumber}`);
+        await this.github.mergePullRequest(worker.prNumber);
+      } catch (error) {
+        console.error(`Failed to merge Worker PR #${worker.prNumber}:`, error);
+      }
+    }
+  }
+
+  /**
+   * Handle a review that requests changes
+   */
+  private async handleReviewChangesRequested(worker: WorkerResult, reviewBody: string): Promise<void> {
+    if (!reviewBody || !worker.prNumber) return;
+
+    try {
+      // Checkout the worker branch
+      await GitOperations.checkout(worker.branch);
+
+      // Create a prompt for the worker to address the review
+      const prompt = `A code reviewer has requested changes on your PR. Please address the following feedback:
+
+**Review Feedback:**
+${reviewBody}
+
+**Your previous implementation is in the current branch.**
+
+Please make the necessary changes to address the reviewer's feedback. Be thorough and ensure the changes align with the review comments.`;
+
+      console.log(`  Running Claude to address review feedback...`);
+      const result = await this.sdkRunner.executeTask(prompt);
+
+      if (result.success) {
+        // Commit and push the changes
+        const hasChanges = await GitOperations.hasUncommittedChanges();
+        if (hasChanges) {
+          await GitOperations.commitAndPush(
+            `fix: address review feedback\n\nChanges based on reviewer comments`,
+            worker.branch
+          );
+          console.log(`  Changes committed and pushed`);
+          
+          // Add a comment to the PR
+          await this.github.addPullRequestComment(
+            worker.prNumber,
+            `I've addressed the review feedback. Please take another look.\n\n---\n*Automated response by Claude Code Orchestrator*`
+          );
+        } else {
+          console.log(`  No changes needed based on review`);
+        }
+      } else {
+        console.error(`  Failed to address review: ${result.error}`);
+      }
+    } catch (error) {
+      console.error(`  Error handling review changes:`, error);
+    }
+  }
+
+  /**
+   * Handle an inline review comment
+   */
+  private async handleInlineComment(worker: WorkerResult, comment: {
+    id: number;
+    user: string;
+    body: string;
+    path: string;
+    line: number | null;
+  }): Promise<void> {
+    if (!comment.body || !worker.prNumber) return;
+
+    try {
+      // Checkout the worker branch
+      await GitOperations.checkout(worker.branch);
+
+      // Create a prompt for the worker to address the inline comment
+      const prompt = `A code reviewer left an inline comment on your PR that needs attention:
+
+**File:** ${comment.path}
+${comment.line ? `**Line:** ${comment.line}` : ''}
+**Comment:** ${comment.body}
+
+Please review the comment and make any necessary changes to the file. If the comment is a question or doesn't require code changes, just acknowledge it.`;
+
+      console.log(`  Running Claude to address inline comment on ${comment.path}...`);
+      const result = await this.sdkRunner.executeTask(prompt);
+
+      if (result.success) {
+        const hasChanges = await GitOperations.hasUncommittedChanges();
+        if (hasChanges) {
+          await GitOperations.commitAndPush(
+            `fix: address review comment on ${comment.path}`,
+            worker.branch
+          );
+          console.log(`  Changes committed`);
+        }
+
+        // Reply to the comment
+        await this.github.replyToReviewComment(
+          worker.prNumber,
+          comment.id,
+          `Addressed. ${hasChanges ? 'Changes pushed.' : 'No code changes needed.'}\n\n---\n*Automated response*`
+        );
+      }
+    } catch (error) {
+      console.error(`  Error handling inline comment:`, error);
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   private async createWorkerPullRequest(

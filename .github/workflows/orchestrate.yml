@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         default: '3'
+      review_wait_minutes:
+        description: 'Minutes to wait for human code review before auto-merging PRs'
+        required: false
+        type: string
+        default: '5'
     secrets:
       CLAUDE_CONFIGS:
         description: 'JSON array of Claude API configurations'
@@ -84,6 +89,7 @@ jobs:
           CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
           MAX_EMS: ${{ inputs.max_ems }}
           MAX_WORKERS_PER_EM: ${{ inputs.max_workers_per_em }}
+          REVIEW_WAIT_MINUTES: ${{ inputs.review_wait_minutes }}
         run: |
           export REPO_OWNER="${GITHUB_REPOSITORY%/*}"
           export REPO_NAME="${GITHUB_REPOSITORY#*/}"

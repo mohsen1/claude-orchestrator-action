@@ -343,5 +343,94 @@ export class GitHubClient {
     getOctokit() {
         return this.octokit;
     }
+    /**
+     * Get reviews for a pull request
+     * @param prNumber - PR number
+     * @returns Array of reviews
+     */
+    async getPullRequestReviews(prNumber) {
+        try {
+            const { data } = await this.octokit.rest.pulls.listReviews({
+                owner: this.getRepo().owner,
+                repo: this.getRepo().repo,
+                pull_number: prNumber
+            });
+            return data.map(review => ({
+                id: review.id,
+                user: review.user?.login || 'unknown',
+                state: review.state,
+                body: review.body || '',
+                submittedAt: review.submitted_at || ''
+            }));
+        }
+        catch (error) {
+            throw new Error(`Failed to get reviews for PR #${prNumber}: ${error.message}`);
+        }
+    }
+    /**
+     * Get review comments for a pull request
+     * @param prNumber - PR number
+     * @returns Array of review comments
+     */
+    async getPullRequestComments(prNumber) {
+        try {
+            const { data } = await this.octokit.rest.pulls.listReviewComments({
+                owner: this.getRepo().owner,
+                repo: this.getRepo().repo,
+                pull_number: prNumber
+            });
+            return data.map(comment => ({
+                id: comment.id,
+                user: comment.user?.login || 'unknown',
+                body: comment.body,
+                path: comment.path,
+                line: comment.line || null,
+                createdAt: comment.created_at
+            }));
+        }
+        catch (error) {
+            throw new Error(`Failed to get comments for PR #${prNumber}: ${error.message}`);
+        }
+    }
+    /**
+     * Reply to a review comment
+     * @param prNumber - PR number
+     * @param commentId - Comment ID to reply to
+     * @param body - Reply body
+     * @returns void
+     */
+    async replyToReviewComment(prNumber, commentId, body) {
+        try {
+            await this.octokit.rest.pulls.createReplyForReviewComment({
+                owner: this.getRepo().owner,
+                repo: this.getRepo().repo,
+                pull_number: prNumber,
+                comment_id: commentId,
+                body
+            });
+        }
+        catch (error) {
+            throw new Error(`Failed to reply to comment ${commentId} on PR #${prNumber}: ${error.message}`);
+        }
+    }
+    /**
+     * Add a comment to a pull request (not a review comment)
+     * @param prNumber - PR number
+     * @param body - Comment body
+     * @returns void
+     */
+    async addPullRequestComment(prNumber, body) {
+        try {
+            await this.octokit.rest.issues.createComment({
+                owner: this.getRepo().owner,
+                repo: this.getRepo().repo,
+                issue_number: prNumber,
+                body
+            });
+        }
+        catch (error) {
+            throw new Error(`Failed to add comment to PR #${prNumber}: ${error.message}`);
+        }
+    }
 }
 //# sourceMappingURL=github.js.map

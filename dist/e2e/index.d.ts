@@ -29,6 +29,7 @@ export interface E2EContext {
     options?: {
         maxEms?: number;
         maxWorkersPerEm?: number;
+        reviewWaitMinutes?: number;
     };
 }
 export declare class E2EOrchestrator {
@@ -47,6 +48,19 @@ export declare class E2EOrchestrator {
     private processEM;
     private processWorker;
     private buildWorkerPrompt;
+    /**
+     * Wait for the configured review period, handle any reviews, then merge PRs
+     */
+    private waitForReviewsAndMerge;
+    /**
+     * Handle a review that requests changes
+     */
+    private handleReviewChangesRequested;
+    /**
+     * Handle an inline review comment
+     */
+    private handleInlineComment;
+    private sleep;
     private createWorkerPullRequest;
     private createEMPullRequest;
     private createFinalPR;

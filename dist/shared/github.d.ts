@@ -150,5 +150,45 @@ export declare class GitHubClient {
     getOctokit(): import("@octokit/core").Octokit & import("@octokit/plugin-rest-endpoint-methods/dist-types/types").Api & {
         paginate: import("@octokit/plugin-paginate-rest").PaginateInterface;
     };
+    /**
+     * Get reviews for a pull request
+     * @param prNumber - PR number
+     * @returns Array of reviews
+     */
+    getPullRequestReviews(prNumber: number): Promise<Array<{
+        id: number;
+        user: string;
+        state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED' | 'PENDING';
+        body: string;
+        submittedAt: string;
+    }>>;
+    /**
+     * Get review comments for a pull request
+     * @param prNumber - PR number
+     * @returns Array of review comments
+     */
+    getPullRequestComments(prNumber: number): Promise<Array<{
+        id: number;
+        user: string;
+        body: string;
+        path: string;
+        line: number | null;
+        createdAt: string;
+    }>>;
+    /**
+     * Reply to a review comment
+     * @param prNumber - PR number
+     * @param commentId - Comment ID to reply to
+     * @param body - Reply body
+     * @returns void
+     */
+    replyToReviewComment(prNumber: number, commentId: number, body: string): Promise<void>;
+    /**
+     * Add a comment to a pull request (not a review comment)
+     * @param prNumber - PR number
+     * @param body - Comment body
+     * @returns void
+     */
+    addPullRequestComment(prNumber: number, body: string): Promise<void>;
 }
 //# sourceMappingURL=github.d.ts.map
