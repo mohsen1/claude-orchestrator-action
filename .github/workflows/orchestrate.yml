@@ -78,13 +78,20 @@ jobs:
             core.setOutput('title', issue.title);
             core.setOutput('body', issue.body || '');
 
+      - name: Get repo info
+        id: repo
+        run: |
+          # Extract repo name from GITHUB_REPOSITORY (owner/repo format)
+          echo "name=${GITHUB_REPOSITORY#*/}" >> $GITHUB_OUTPUT
+          echo "owner=${GITHUB_REPOSITORY%/*}" >> $GITHUB_OUTPUT
+
       - name: Run Director Analysis
         id: analyze
         working-directory: target
         env:
           GITHUB_TOKEN: ${{ secrets.CCO_PAT }}
-          REPO_OWNER: ${{ github.repository_owner }}
-          REPO_NAME: ${{ github.event.repository.name }}
+          REPO_OWNER: ${{ steps.repo.outputs.owner }}
+          REPO_NAME: ${{ steps.repo.outputs.name }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
           ISSUE_TITLE: ${{ steps.issue.outputs.title }}
           ISSUE_BODY: ${{ steps.issue.outputs.body }}
