@@ -125,11 +125,12 @@ export const GitOperations = {
       // Commit
       await execa('git', ['commit', '-m', message]);
 
-      // Push (to specific branch if provided as string)
+      // Push (to specific branch if provided as string, otherwise push current HEAD)
       if (typeof branchOrFiles === 'string') {
         await execa('git', ['push', '-u', 'origin', branchOrFiles]);
       } else {
-        await execa('git', ['push']);
+        // Use origin HEAD to handle new branches without upstream
+        await execa('git', ['push', '-u', 'origin', 'HEAD']);
       }
     } catch (error) {
       throw new Error(
