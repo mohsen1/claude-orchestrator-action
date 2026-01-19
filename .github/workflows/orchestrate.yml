@@ -1,0 +1,276 @@
+name: Claude Code Orchestrator
+
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        description: 'Issue number to orchestrate'
+        required: true
+        type: number
+      max_ems:
+        description: 'Maximum number of Engineering Managers'
+        required: false
+        type: number
+        default: 3
+      max_workers_per_em:
+        description: 'Maximum Workers per EM'
+        required: false
+        type: number
+        default: 3
+    secrets:
+      CLAUDE_CONFIGS:
+        description: 'JSON array of Claude API configurations'
+        required: true
+      CCO_PAT:
+        description: 'GitHub PAT with repo and workflow permissions'
+        required: true
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  director:
+    name: Director - Analyze Issue
+    runs-on: ubuntu-latest
+    outputs:
+      em_tasks: ${{ steps.analyze.outputs.em_tasks }}
+      work_branch: ${{ steps.analyze.outputs.work_branch }}
+      issue_title: ${{ steps.issue.outputs.title }}
+      issue_body: ${{ steps.issue.outputs.body }}
+    steps:
+      - name: Checkout orchestrator
+        uses: actions/checkout@v4
+        with:
+          repository: mohsen1/claude-orchestrator-action
+          path: orchestrator
+
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          path: target
+          token: ${{ secrets.CCO_PAT }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: cd orchestrator && npm ci
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Get issue details
+        id: issue
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CCO_PAT }}
+          script: |
+            const { data: issue } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ inputs.issue_number }}
+            });
+            core.setOutput('title', issue.title);
+            core.setOutput('body', issue.body || '');
+
+      - name: Run Director Analysis
+        id: analyze
+        working-directory: target
+        env:
+          GITHUB_TOKEN: ${{ secrets.CCO_PAT }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          ISSUE_TITLE: ${{ steps.issue.outputs.title }}
+          ISSUE_BODY: ${{ steps.issue.outputs.body }}
+          CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
+          MAX_EMS: ${{ inputs.max_ems }}
+          MAX_WORKERS_PER_EM: ${{ inputs.max_workers_per_em }}
+        run: |
+          node ../orchestrator/dist/director/run.js 2>&1 | tee director.log
+          
+          # Extract outputs from state file
+          if [ -f .orchestrator/director.json ]; then
+            WORK_BRANCH=$(jq -r '.work_branch' .orchestrator/director.json)
+            EM_TASKS=$(jq -c '.task_breakdown' .orchestrator/director.json)
+            echo "work_branch=$WORK_BRANCH" >> $GITHUB_OUTPUT
+            echo "em_tasks=$EM_TASKS" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post status comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CCO_PAT }}
+          script: |
+            const workBranch = '${{ steps.analyze.outputs.work_branch }}' || 'unknown';
+            const emTasks = JSON.parse('${{ steps.analyze.outputs.em_tasks }}' || '[]');
+            const status = '${{ job.status }}' === 'success' ? 'In Progress' : 'Failed';
+            
+            let body = `## Orchestration Status\n\n`;
+            body += `**Status:** ${status}\n`;
+            body += `**Work Branch:** \`${workBranch}\`\n\n`;
+            
+            if (emTasks.length > 0) {
+              body += `### Task Breakdown\n\n`;
+              body += `| EM | Task | Status |\n`;
+              body += `|----|------|--------|\n`;
+              for (const task of emTasks) {
+                body += `| EM-${task.em_id} | ${task.task} | Pending |\n`;
+              }
+            }
+            
+            body += `\n---\n*Updated: ${new Date().toISOString()}*`;
+            
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ inputs.issue_number }},
+              per_page: 100
+            });
+            
+            const existing = comments.find(c => c.body?.includes('## Orchestration Status'));
+            
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: ${{ inputs.issue_number }},
+                body
+              });
+            }
+
+  execute:
+    name: Execute Tasks
+    needs: director
+    if: needs.director.outputs.em_tasks != '[]' && needs.director.outputs.em_tasks != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout orchestrator
+        uses: actions/checkout@v4
+        with:
+          repository: mohsen1/claude-orchestrator-action
+          path: orchestrator
+
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          path: target
+          token: ${{ secrets.CCO_PAT }}
+          ref: ${{ needs.director.outputs.work_branch }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: cd orchestrator && npm ci
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Execute EM Tasks
+        working-directory: target
+        env:
+          GITHUB_TOKEN: ${{ secrets.CCO_PAT }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
+          WORK_BRANCH: ${{ needs.director.outputs.work_branch }}
+          EM_TASKS: ${{ needs.director.outputs.em_tasks }}
+          ISSUE_TITLE: ${{ needs.director.outputs.issue_title }}
+          ISSUE_BODY: ${{ needs.director.outputs.issue_body }}
+        run: |
+          echo "Executing EM tasks on branch: $WORK_BRANCH"
+          
+          # Process each EM task sequentially
+          echo "$EM_TASKS" | jq -c '.[]' | while read -r task; do
+            EM_ID=$(echo "$task" | jq -r '.em_id')
+            TASK_DESC=$(echo "$task" | jq -r '.task')
+            
+            echo "=========================================="
+            echo "Processing EM-$EM_ID: $TASK_DESC"
+            echo "=========================================="
+            
+            # Run the EM logic
+            export EM_ID
+            export TASK_ASSIGNMENT="$TASK_DESC"
+            node ../orchestrator/dist/em/run.js || echo "EM-$EM_ID failed, continuing..."
+            
+            # Commit any changes
+            git add -A
+            if ! git diff --staged --quiet; then
+              git commit -m "EM-$EM_ID: $TASK_DESC"
+              git push origin "$WORK_BRANCH"
+            fi
+          done
+
+      - name: Create Pull Request
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CCO_PAT }}
+          script: |
+            const workBranch = '${{ needs.director.outputs.work_branch }}';
+            const issueNumber = ${{ inputs.issue_number }};
+            const issueTitle = `${{ needs.director.outputs.issue_title }}`;
+            
+            // Check if PR already exists
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${workBranch}`,
+              state: 'open'
+            });
+            
+            if (prs.length > 0) {
+              console.log('PR already exists:', prs[0].html_url);
+              return;
+            }
+            
+            // Create PR
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Orchestrator] #${issueNumber}: ${issueTitle}`,
+              body: `Automated implementation for #${issueNumber}\n\nThis PR was created by the Claude Code Orchestrator.`,
+              head: workBranch,
+              base: 'main'
+            });
+            
+            console.log('Created PR:', pr.html_url);
+            
+            // Update issue comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              per_page: 100
+            });
+            
+            const existing = comments.find(c => c.body?.includes('## Orchestration Status'));
+            if (existing) {
+              let body = existing.body.replace('**Status:** In Progress', '**Status:** Complete');
+              body += `\n\n**Pull Request:** ${pr.html_url}`;
+              
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            }
