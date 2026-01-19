@@ -1,0 +1,97 @@
+name: Handle PR Review
+
+on:
+  workflow_call:
+    secrets:
+      CLAUDE_CONFIGS:
+        description: 'JSON array of Claude API configurations'
+        required: true
+      CCO_PAT:
+        description: 'GitHub PAT with repo and workflow permissions'
+        required: true
+
+jobs:
+  handle-review:
+    name: Handle Review
+    # Only run on CCO-created PRs (branches starting with cco/)
+    if: startsWith(github.event.pull_request.head.ref, 'cco/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if changes requested
+        id: check
+        run: |
+          echo "review_state=${{ github.event.review.state }}" >> $GITHUB_OUTPUT
+          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          echo "branch=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
+          echo "Review state: ${{ github.event.review.state }}"
+          echo "PR: #${{ github.event.pull_request.number }}"
+          echo "Branch: ${{ github.event.pull_request.head.ref }}"
+
+      - name: Skip if not changes_requested
+        if: github.event.review.state != 'changes_requested'
+        run: |
+          echo "Review state is '${{ github.event.review.state }}', not 'changes_requested'. Skipping."
+
+      - name: Checkout orchestrator
+        if: github.event.review.state == 'changes_requested'
+        uses: actions/checkout@v4
+        with:
+          repository: mohsen1/claude-orchestrator-action
+          path: orchestrator
+
+      - name: Checkout target repo
+        if: github.event.review.state == 'changes_requested'
+        uses: actions/checkout@v4
+        with:
+          path: target
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.CCO_PAT }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        if: github.event.review.state == 'changes_requested'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies and build
+        if: github.event.review.state == 'changes_requested'
+        run: cd orchestrator && npm ci && npm run build
+
+      - name: Install Claude Code CLI
+        if: github.event.review.state == 'changes_requested'
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure Git
+        if: github.event.review.state == 'changes_requested'
+        working-directory: target
+        run: |
+          git config user.name "Claude Orchestrator"
+          git config user.email "orchestrator@claude.ai"
+
+      - name: Handle review feedback
+        if: github.event.review.state == 'changes_requested'
+        working-directory: target
+        env:
+          GITHUB_TOKEN: ${{ secrets.CCO_PAT }}
+          CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEW_BODY: ${{ github.event.review.body }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          export REPO_OWNER="${GITHUB_REPOSITORY%/*}"
+          export REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          node ../orchestrator/dist/review-handler/run.js
+
+      - name: Post acknowledgment comment
+        if: github.event.review.state == 'changes_requested'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CCO_PAT }}
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.pull_request.number }},
+              body: `## Addressing Review Feedback\n\nI'm working on addressing the requested changes. This may take a few minutes.\n\n---\n*Automated by Claude Code Orchestrator*`
+            });

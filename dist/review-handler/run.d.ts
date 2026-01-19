@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Review Handler executable entry point
- * Called by GitHub Actions workflow
+ * Review handler entry point
+ * Triggered when a PR review requests changes
+ * Runs Claude to address the feedback and push fixes
  */
 export {};
 //# sourceMappingURL=run.d.ts.map

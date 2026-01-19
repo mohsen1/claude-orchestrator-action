@@ -15,6 +15,8 @@ name: Claude Orchestrator
 on:
   issues:
     types: [labeled]
+  pull_request_review:
+    types: [submitted]
 
 permissions:
   contents: write
@@ -22,11 +24,24 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Main orchestration - triggered by adding 'orchestrator' label to an issue
   orchestrate:
-    if: github.event.label.name == 'orchestrator'
+    if: github.event_name == 'issues' && github.event.label.name == 'orchestrator'
     uses: mohsen1/claude-orchestrator-action/.github/workflows/orchestrate.yml@main
     with:
       issue_number: ${{ github.event.issue.number }}
+      # Optional: customize these settings
+      # max_ems: '3'                  # Maximum Engineering Managers (default: 3)
+      # max_workers_per_em: '3'       # Maximum workers per EM (default: 3)
+      # review_wait_minutes: '5'      # Minutes to wait for human review (default: 5)
+    secrets:
+      CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
+      CCO_PAT: ${{ secrets.CCO_PAT }}
+
+  # Review handler - triggered when changes are requested on CCO PRs
+  handle-review:
+    if: github.event_name == 'pull_request_review'
+    uses: mohsen1/claude-orchestrator-action/.github/workflows/review-handler.yml@main
     secrets:
       CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
       CCO_PAT: ${{ secrets.CCO_PAT }}
