@@ -85,7 +85,22 @@ export const GitOperations = {
         // File might not exist, that's ok
       }
       
-      await execa('git', ['checkout', branchName]);
+      // Try to checkout directly first
+      try {
+        await execa('git', ['checkout', branchName]);
+        return;
+      } catch {
+        // Branch might not exist locally, try fetching it
+      }
+      
+      // Fetch the branch from remote and checkout
+      try {
+        await execa('git', ['fetch', 'origin', branchName]);
+        await execa('git', ['checkout', branchName]);
+      } catch {
+        // If that also fails, try creating from remote
+        await execa('git', ['checkout', '-b', branchName, `origin/${branchName}`]);
+      }
     } catch (error) {
       throw new Error(
         `Failed to checkout branch ${branchName}: ${(error as Error).message}`
