@@ -5,7 +5,7 @@
  * This enables event-driven architecture where workflows can wake up,
  * read state, take action, update state, and exit.
  */
-export type Phase = 'initialized' | 'analyzing' | 'em_assignment' | 'worker_execution' | 'worker_review' | 'em_merging' | 'em_review' | 'final_merge' | 'complete' | 'failed';
+export type Phase = 'initialized' | 'analyzing' | 'project_setup' | 'em_assignment' | 'worker_execution' | 'worker_review' | 'em_merging' | 'em_review' | 'final_merge' | 'final_review' | 'complete' | 'failed';
 export type WorkerStatus = 'pending' | 'in_progress' | 'pr_created' | 'changes_requested' | 'approved' | 'merged';
 export type EMStatus = 'pending' | 'workers_running' | 'workers_complete' | 'pr_created' | 'changes_requested' | 'approved' | 'merged';
 export interface WorkerState {
@@ -35,6 +35,14 @@ export interface EMState {
     startedAt?: string;
     completedAt?: string;
 }
+export interface ProjectSetup {
+    completed: boolean;
+    gitignore?: boolean;
+    packageJson?: boolean;
+    tsconfig?: boolean;
+    setupBranch?: string;
+    setupPrNumber?: number;
+}
 export interface OrchestratorState {
     version: number;
     issue: {
@@ -49,10 +57,12 @@ export interface OrchestratorState {
     phase: Phase;
     workBranch: string;
     baseBranch: string;
+    projectSetup?: ProjectSetup;
     ems: EMState[];
     finalPr?: {
         number: number;
         url: string;
+        reviewsAddressed?: number;
     };
     config: {
         maxEms: number;
@@ -60,6 +70,7 @@ export interface OrchestratorState {
         reviewWaitMinutes: number;
         prLabel: string;
     };
+    analysisSummary?: string;
     createdAt: string;
     updatedAt: string;
     error?: string;

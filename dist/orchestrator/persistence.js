@@ -3,11 +3,22 @@
  *
  * Handles reading and writing orchestrator state to the work branch.
  * State is stored in .orchestrator/state.json
+ *
+ * NOTE: State is only committed to the MAIN work branch, not to EM/worker branches.
+ * This prevents merge conflicts when branches are merged back.
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { GitOperations } from '../shared/git.js';
 import { STATE_FILE_PATH, serializeState, parseState, touchState } from './state.js';
+// Track if we're on the main work branch (where state should be committed)
+let cachedWorkBranch = null;
+/**
+ * Set the main work branch name (call this when starting orchestration)
+ */
+export function setWorkBranch(branch) {
+    cachedWorkBranch = branch;
+}
 /**
  * Load state from the current branch
  * Returns null if state file doesn't exist
@@ -21,6 +32,10 @@ export async function loadState() {
         const content = readFileSync(STATE_FILE_PATH, 'utf-8');
         const state = parseState(content);
         console.log(`Loaded state: phase=${state.phase}, ems=${state.ems.length}`);
+        // Cache the work branch from loaded state
+        if (state.workBranch) {
+            cachedWorkBranch = state.workBranch;
+        }
         return state;
     }
     catch (error) {
@@ -29,29 +44,41 @@ export async function loadState() {
     }
 }
 /**
- * Save state to the current branch and commit
+ * Save state to the work branch and commit
+ * Only commits if on the main work branch to prevent conflicts
  */
 export async function saveState(state, message) {
     try {
         // Update timestamp
         const updatedState = touchState(state);
+        // Cache the work branch
+        if (state.workBranch) {
+            cachedWorkBranch = state.workBranch;
+        }
         // Ensure directory exists
         const dir = dirname(STATE_FILE_PATH);
         if (!existsSync(dir)) {
             mkdirSync(dir, { recursive: true });
         }
-        // Write state file
+        // Write state file locally (always do this for recovery)
         writeFileSync(STATE_FILE_PATH, serializeState(updatedState));
-        // Stage and commit
-        const commitMessage = message || `chore: update orchestrator state (phase: ${state.phase})`;
-        // Check if there are changes to commit
-        const hasChanges = await GitOperations.hasUncommittedChanges();
-        if (hasChanges) {
-            await GitOperations.commitAndPush(commitMessage, [STATE_FILE_PATH]);
-            console.log(`State saved and pushed: ${state.phase}`);
+        // Check current branch
+        const currentBranch = await GitOperations.getCurrentBranch();
+        const isOnWorkBranch = currentBranch === cachedWorkBranch;
+        // Only commit and push if on the main work branch
+        if (isOnWorkBranch) {
+            const commitMessage = message || `chore: update orchestrator state (phase: ${state.phase})`;
+            const hasChanges = await GitOperations.hasUncommittedChanges();
+            if (hasChanges) {
+                await GitOperations.commitAndPush(commitMessage, [STATE_FILE_PATH]);
+                console.log(`State saved and pushed: ${state.phase}`);
+            }
+            else {
+                console.log('No state changes to commit');
+            }
         }
         else {
-            console.log('No state changes to commit');
+            console.log(`State saved locally (not on work branch: ${currentBranch} vs ${cachedWorkBranch})`);
         }
     }
     catch (error) {

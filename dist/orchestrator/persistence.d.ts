@@ -3,15 +3,23 @@
  *
  * Handles reading and writing orchestrator state to the work branch.
  * State is stored in .orchestrator/state.json
+ *
+ * NOTE: State is only committed to the MAIN work branch, not to EM/worker branches.
+ * This prevents merge conflicts when branches are merged back.
  */
 import { OrchestratorState } from './state.js';
+/**
+ * Set the main work branch name (call this when starting orchestration)
+ */
+export declare function setWorkBranch(branch: string): void;
 /**
  * Load state from the current branch
  * Returns null if state file doesn't exist
  */
 export declare function loadState(): Promise<OrchestratorState | null>;
 /**
- * Save state to the current branch and commit
+ * Save state to the work branch and commit
+ * Only commits if on the main work branch to prevent conflicts
  */
 export declare function saveState(state: OrchestratorState, message?: string): Promise<void>;
 /**

@@ -9,13 +9,15 @@
 export type Phase = 
   | 'initialized'      // Work branch created, ready for analysis
   | 'analyzing'        // Director is analyzing the issue
+  | 'project_setup'    // Setting up project foundation (gitignore, package.json, etc.)
   | 'em_assignment'    // EMs have been assigned tasks
   | 'worker_execution' // Workers are executing tasks
   | 'worker_review'    // Waiting for reviews on worker PRs
   | 'em_merging'       // Merging worker PRs into EM branches
   | 'em_review'        // Waiting for reviews on EM PRs
   | 'final_merge'      // Merging EM PRs into work branch
-  | 'complete'         // Final PR to main created
+  | 'final_review'     // Waiting for reviews on final PR
+  | 'complete'         // Final PR merged or ready
   | 'failed';          // Orchestration failed
 
 export type WorkerStatus = 
@@ -64,6 +66,15 @@ export interface EMState {
   completedAt?: string;
 }
 
+export interface ProjectSetup {
+  completed: boolean;
+  gitignore?: boolean;
+  packageJson?: boolean;
+  tsconfig?: boolean;
+  setupBranch?: string;
+  setupPrNumber?: number;
+}
+
 export interface OrchestratorState {
   version: number;
   
@@ -87,6 +98,9 @@ export interface OrchestratorState {
   workBranch: string;
   baseBranch: string; // Usually 'main'
   
+  // Project setup tracking
+  projectSetup?: ProjectSetup;
+  
   // EM and Worker states
   ems: EMState[];
   
@@ -94,6 +108,7 @@ export interface OrchestratorState {
   finalPr?: {
     number: number;
     url: string;
+    reviewsAddressed?: number;
   };
   
   // Configuration
@@ -103,6 +118,9 @@ export interface OrchestratorState {
     reviewWaitMinutes: number;
     prLabel: string;
   };
+  
+  // Director's analysis summary (for PR description)
+  analysisSummary?: string;
   
   // Timestamps
   createdAt: string;

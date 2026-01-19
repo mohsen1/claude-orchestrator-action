@@ -85,9 +85,13 @@ export declare class EventDrivenOrchestrator {
      */
     private handlePRReview;
     /**
-     * Address review feedback on a branch
+     * Address review feedback on a branch (worker/EM PRs)
      */
     private addressReview;
+    /**
+     * Address review feedback on the final PR
+     */
+    private addressFinalPRReview;
     /**
      * Handle progress check - continue any pending work
      */

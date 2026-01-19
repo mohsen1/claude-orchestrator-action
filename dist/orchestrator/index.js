@@ -141,47 +141,107 @@ export class EventDrivenOrchestrator {
 ${this.state.issue.body}
 
 **Your task:**
-Break this issue down into EM (Engineering Manager) tasks. Each EM focuses on a distinct area.
+1. First, determine if this project needs initial setup (gitignore, package.json, tsconfig, etc.)
+2. Break this issue down into EM (Engineering Manager) tasks. Each EM focuses on a distinct area.
+3. Provide a brief summary for the PR description.
+
+**Important Guidelines:**
+- If this is a new project, include a "Project Setup" EM (id: 0) that runs FIRST
+- Project Setup EM should create: .gitignore, package.json, tsconfig.json, basic folder structure
+- Other EMs should wait until setup is complete
+- Scale team size based on complexity: simple tasks = 1-2 workers, complex = 2-3 workers
+- EMs should have non-overlapping responsibilities
 
 **Constraints:**
-- Maximum ${maxEms} EMs
+- Maximum ${maxEms} EMs (not counting setup)
 - Each EM can have up to ${maxWorkersPerEm} Workers
-- EMs should have non-overlapping responsibilities
-- Keep tasks focused and actionable
 
-**Output ONLY a JSON array (no other text):**
-[
-  {
-    "em_id": 1,
-    "task": "Description of what this EM should accomplish",
-    "focus_area": "e.g., Core Logic, UI, Testing",
-    "estimated_workers": 2
-  }
-]`;
+**Output ONLY a JSON object (no other text):**
+{
+  "needs_setup": true,
+  "summary": "Brief summary of the implementation plan for PR description",
+  "ems": [
+    {
+      "em_id": 0,
+      "task": "Set up project foundation with .gitignore, package.json, tsconfig.json",
+      "focus_area": "Project Setup",
+      "estimated_workers": 1,
+      "must_complete_first": true
+    },
+    {
+      "em_id": 1,
+      "task": "Description of what this EM should accomplish",
+      "focus_area": "e.g., Core Logic, UI, Testing",
+      "estimated_workers": 2,
+      "must_complete_first": false
+    }
+  ]
+}`;
         const sessionId = generateSessionId('director', this.state.issue.number);
         const result = await this.claude.runTask(prompt, sessionId);
         if (!result.success) {
             throw new Error(`Director analysis failed: ${result.stderr}`);
         }
-        const emTasks = extractJson(result.stdout);
-        if (!Array.isArray(emTasks) || emTasks.length === 0) {
+        const analysis = extractJson(result.stdout);
+        if (!analysis.ems || !Array.isArray(analysis.ems) || analysis.ems.length === 0) {
             throw new Error('Director returned no EM tasks');
         }
-        // Create EM states
-        this.state.ems = emTasks.slice(0, maxEms).map(em => ({
-            id: em.em_id,
-            task: em.task,
-            focusArea: em.focus_area,
-            branch: `cco/issue-${this.state.issue.number}-em-${em.em_id}`,
-            status: 'pending',
-            workers: [],
-            reviewsAddressed: 0,
-            startedAt: new Date().toISOString()
-        }));
-        this.state.phase = 'em_assignment';
-        await saveState(this.state, `chore: director assigned ${this.state.ems.length} EMs`);
-        // Start first EM
-        await this.startNextEM();
+        // Store summary for PR description
+        this.state.analysisSummary = analysis.summary;
+        // Check if we need project setup first
+        const setupEM = analysis.ems.find(em => em.must_complete_first || em.focus_area === 'Project Setup');
+        const otherEMs = analysis.ems.filter(em => !em.must_complete_first && em.focus_area !== 'Project Setup');
+        if (setupEM) {
+            // Run setup phase first
+            this.state.projectSetup = { completed: false };
+            this.state.phase = 'project_setup';
+            // Create setup EM state
+            this.state.ems = [{
+                    id: 0,
+                    task: setupEM.task,
+                    focusArea: 'Project Setup',
+                    branch: `cco/issue-${this.state.issue.number}-setup`,
+                    status: 'pending',
+                    workers: [],
+                    reviewsAddressed: 0,
+                    startedAt: new Date().toISOString()
+                }];
+            // Store other EMs for later
+            const pendingEMs = otherEMs.slice(0, maxEms).map((em, idx) => ({
+                id: idx + 1,
+                task: em.task,
+                focusArea: em.focus_area,
+                branch: `cco/issue-${this.state.issue.number}-em-${idx + 1}`,
+                status: 'pending',
+                workers: [],
+                reviewsAddressed: 0
+            }));
+            await saveState(this.state, `chore: director starting project setup first`);
+            // Start setup
+            await this.startNextEM();
+            // After setup completes, add other EMs
+            // This happens in checkFinalMerge when setup EM is done
+            if (pendingEMs.length > 0) {
+                this.state.ems.push(...pendingEMs);
+            }
+        }
+        else {
+            // No setup needed, proceed normally
+            this.state.ems = otherEMs.slice(0, maxEms).map((em, idx) => ({
+                id: idx + 1,
+                task: em.task,
+                focusArea: em.focus_area,
+                branch: `cco/issue-${this.state.issue.number}-em-${idx + 1}`,
+                status: 'pending',
+                workers: [],
+                reviewsAddressed: 0,
+                startedAt: new Date().toISOString()
+            }));
+            this.state.phase = 'em_assignment';
+            await saveState(this.state, `chore: director assigned ${this.state.ems.length} EMs`);
+            // Start first EM
+            await this.startNextEM();
+        }
     }
     /**
      * Start the next pending EM
@@ -291,14 +351,24 @@ ${this.state.issue.body}
 **Context - Original Issue:**
 ${this.state.issue.body}
 
-**Instructions:**
+**CRITICAL Instructions:**
 1. Implement the task completely
-2. Create or modify the necessary files
-3. Write clean, production-ready code
+2. Create or modify ONLY the necessary source code files
+3. Write clean, production-ready TypeScript/JavaScript code
 4. Include necessary imports and exports
-5. Do NOT create test files unless specifically asked
 
-Implement this task now.`;
+**DO NOT create these files:**
+- IMPLEMENTATION_SUMMARY.md or any summary/documentation files
+- README.md (unless specifically asked)
+- test files (unless specifically asked)
+- Any files that explain what you did - just do the code
+
+If this is a setup task, ensure you create:
+- .gitignore with node_modules, dist, .env, etc.
+- package.json with appropriate dependencies
+- tsconfig.json if TypeScript is used
+
+Implement this task now - code only, no documentation files.`;
         const result = await this.sdkRunner.executeTask(prompt);
         if (!result.success) {
             pendingWorker.status = 'pending'; // Reset to retry
@@ -425,25 +495,30 @@ Implement this task now.`;
         if (!this.state)
             throw new Error('No state');
         console.log('\n=== Creating Final PR ===');
+        // Build comprehensive PR body with analysis summary
+        const summarySection = this.state.analysisSummary
+            ? `### Implementation Summary\n${this.state.analysisSummary}\n\n`
+            : '';
         const body = `## Automated Implementation for Issue #${this.state.issue.number}
 
 **Issue:** ${this.state.issue.title}
 
-### Summary
-This PR was automatically generated by the Claude Code Orchestrator.
-
+${summarySection}### Orchestration Details
 - **EMs:** ${this.state.ems.length}
 - **Total Workers:** ${this.state.ems.reduce((sum, em) => sum + em.workers.length, 0)}
 
-### Breakdown
+### Task Breakdown
 ${this.state.ems.map(em => `
 #### EM-${em.id}: ${em.focusArea}
 ${em.task}
 - Workers: ${em.workers.length}
+${em.workers.map(w => `  - Worker-${w.id}: ${w.task.substring(0, 60)}...`).join('\n')}
 `).join('\n')}
 
 ---
-Closes #${this.state.issue.number}`;
+Closes #${this.state.issue.number}
+
+*Automated by Claude Code Orchestrator*`;
         const pr = await this.github.createPullRequest({
             title: `feat: ${this.state.issue.title}`,
             body,
@@ -452,11 +527,11 @@ Closes #${this.state.issue.number}`;
         });
         // Add label to final PR
         await this.github.addLabels(pr.number, [this.state.config.prLabel]);
-        this.state.finalPr = { number: pr.number, url: pr.html_url };
-        this.state.phase = 'complete';
+        this.state.finalPr = { number: pr.number, url: pr.html_url, reviewsAddressed: 0 };
+        this.state.phase = 'final_review'; // Wait for final review
         await saveState(this.state, `chore: final PR created (#${pr.number})`);
         // Post comment on issue
-        await this.github.updateIssueComment(this.state.issue.number, `## Orchestration Complete\n\nFinal PR: #${pr.number}\n${pr.html_url}\n\nPlease review and merge when ready.\n\n---\n*Automated by Claude Code Orchestrator*`);
+        await this.github.updateIssueComment(this.state.issue.number, `## Orchestration Complete\n\nFinal PR: #${pr.number}\n${pr.html_url}\n\nThe PR will respond to code review feedback automatically.\n\n---\n*Automated by Claude Code Orchestrator*`);
         console.log(`Final PR created: ${pr.html_url}`);
     }
     /**
@@ -502,8 +577,18 @@ Closes #${this.state.issue.number}`;
      * Handle PR review event
      */
     async handlePRReview(event) {
-        if (!event.prNumber || !event.branch || event.reviewState !== 'changes_requested') {
-            console.log('PR review event: no action needed');
+        if (!event.prNumber || !event.branch) {
+            console.log('PR review event: missing prNumber or branch');
+            return;
+        }
+        // Only act on changes_requested or commented (for Copilot reviews with comments)
+        if (event.reviewState !== 'changes_requested' && event.reviewState !== 'commented') {
+            console.log(`PR review event: state is ${event.reviewState}, no action needed`);
+            return;
+        }
+        // For 'commented' reviews, check if there's actual actionable feedback
+        if (event.reviewState === 'commented' && (!event.reviewBody || event.reviewBody.length < 20)) {
+            console.log('PR review event: commented but no substantial feedback');
             return;
         }
         // Find work branch
@@ -514,12 +599,18 @@ Closes #${this.state.issue.number}`;
         this.state = await this.loadStateFromWorkBranch(workBranch);
         if (!this.state)
             return;
+        // Check if this is the final PR
+        if (this.state.finalPr?.number === event.prNumber) {
+            console.log('Addressing review on final PR');
+            await this.addressFinalPRReview(event.prNumber, event.reviewBody || '');
+            return;
+        }
         // Find the worker or EM that owns this PR
         for (const em of this.state.ems) {
             for (const worker of em.workers) {
                 if (worker.prNumber === event.prNumber) {
                     console.log(`Addressing review on Worker-${worker.id} PR`);
-                    await this.addressReview(worker.branch, event.reviewBody || '');
+                    await this.addressReview(worker.branch, event.prNumber, event.reviewBody || '');
                     worker.reviewsAddressed++;
                     worker.status = 'pr_created';
                     await saveState(this.state);
@@ -528,7 +619,7 @@ Closes #${this.state.issue.number}`;
             }
             if (em.prNumber === event.prNumber) {
                 console.log(`Addressing review on EM-${em.id} PR`);
-                await this.addressReview(em.branch, event.reviewBody || '');
+                await this.addressReview(em.branch, event.prNumber, event.reviewBody || '');
                 em.reviewsAddressed++;
                 em.status = 'pr_created';
                 await saveState(this.state);
@@ -537,22 +628,74 @@ Closes #${this.state.issue.number}`;
         }
     }
     /**
-     * Address review feedback on a branch
+     * Address review feedback on a branch (worker/EM PRs)
      */
-    async addressReview(branch, reviewBody) {
+    async addressReview(branch, prNumber, reviewBody) {
         await GitOperations.checkout(branch);
-        const prompt = `A code reviewer has requested changes. Please address the following feedback:
+        // Also fetch review comments from the PR for more context
+        const reviewComments = await this.github.getPullRequestComments(prNumber);
+        const commentContext = reviewComments.length > 0
+            ? `\n\n**Inline Review Comments:**\n${reviewComments.map(c => `- ${c.path}:${c.line}: ${c.body}`).join('\n')}`
+            : '';
+        const prompt = `A code reviewer has provided feedback on this PR. Please address ALL the issues mentioned.
 
 **Review Feedback:**
-${reviewBody}
+${reviewBody}${commentContext}
 
-Please make the necessary changes to address the reviewer's feedback.`;
+**Instructions:**
+1. Address each point raised in the review
+2. Make the necessary code changes
+3. DO NOT create documentation files - just fix the code
+4. Be thorough - address ALL comments, not just some
+
+Make the changes now.`;
         const result = await this.sdkRunner.executeTask(prompt);
         if (result.success) {
             const hasChanges = await GitOperations.hasUncommittedChanges();
             if (hasChanges) {
                 await GitOperations.commitAndPush('fix: address review feedback', branch);
                 console.log('Review feedback addressed and pushed');
+            }
+            else {
+                console.log('No changes needed to address review');
+            }
+        }
+    }
+    /**
+     * Address review feedback on the final PR
+     */
+    async addressFinalPRReview(prNumber, reviewBody) {
+        if (!this.state)
+            throw new Error('No state');
+        await GitOperations.checkout(this.state.workBranch);
+        // Fetch review comments
+        const reviewComments = await this.github.getPullRequestComments(prNumber);
+        const commentContext = reviewComments.length > 0
+            ? `\n\n**Inline Review Comments:**\n${reviewComments.map(c => `- ${c.path}:${c.line}: ${c.body}`).join('\n')}`
+            : '';
+        const prompt = `A code reviewer has provided feedback on the final PR. Please address ALL the issues mentioned.
+
+**Review Feedback:**
+${reviewBody}${commentContext}
+
+**Instructions:**
+1. Address each point raised in the review
+2. Make the necessary code changes across any files that need fixing
+3. DO NOT create documentation files - just fix the code
+4. Be thorough - address ALL comments
+
+Make the changes now.`;
+        const result = await this.sdkRunner.executeTask(prompt);
+        if (result.success) {
+            const hasChanges = await GitOperations.hasUncommittedChanges();
+            if (hasChanges) {
+                await GitOperations.commitAndPush('fix: address final PR review feedback', this.state.workBranch);
+                this.state.finalPr.reviewsAddressed = (this.state.finalPr.reviewsAddressed || 0) + 1;
+                await saveState(this.state);
+                console.log('Final PR review feedback addressed and pushed');
+            }
+            else {
+                console.log('No changes needed to address final PR review');
             }
         }
     }
