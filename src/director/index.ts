@@ -468,12 +468,26 @@ Provide your analysis and the JSON output below:`;
       'orchestrator-failed'
     ]);
 
-    // Post error comment
-    const errorComment = `## ❌ Orchestration Failed
+    // Build workflow run URL (available in GitHub Actions environment)
+    const workflowRunUrl = process.env.GITHUB_SERVER_URL && process.env.GITHUB_RUN_ID
+      ? `${process.env.GITHUB_SERVER_URL}/${this.context.repo.owner}/${this.context.repo.repo}/actions/runs/${process.env.GITHUB_RUN_ID}`
+      : 'the workflow logs';
+
+    // Post error comment - uses same header to update existing comment
+    const errorComment = `## 🤖 Orchestration Status
+
+**Status:** ❌ Failed
+**Work Branch:** \`${this.state?.work_branch || 'unknown'}\`
+
+### Error Details
 
 **Error:** ${error.message}
 
-Please check the workflow logs for more details.`;
+[View Workflow Logs](${workflowRunUrl}) for more details.
+
+---
+
+*Last updated: ${new Date().toISOString()}*`;
 
     await this.github.updateIssueComment(
       this.context.issue.number,

@@ -62,12 +62,53 @@ jobs:
           github-token: ${{ secrets.CCO_PAT }}
           script: |
             const issueNumber = ${{ github.event.issue.number || inputs.issue_number }};
-            await github.rest.issues.createComment({
+            const issueTitle = '${{ github.event.issue.title || '' }}';
+            const workflowRunUrl = `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            // Find existing orchestrator comment
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issueNumber,
-              body: '❌ **Orchestration Failed:** Check workflow logs for details.'
+              per_page: 100
             });
+
+            const orchestratorComment = comments.find(comment =>
+              comment.body?.includes('## 🤖 Orchestration Status')
+            );
+
+            const errorBody = `## 🤖 Orchestration Status
+
+**Status:** ❌ Failed
+**Work Branch:** \`unknown\`
+
+### Error Details
+
+**Error:** Workflow failed during execution. Check the workflow logs for more details.
+
+[View Workflow Logs](${workflowRunUrl}) for more details.
+
+---
+*Last updated: ${new Date().toISOString()}*`;
+
+            if (orchestratorComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: orchestratorComment.id,
+                body: errorBody
+              });
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body: errorBody
+              });
+            }
+
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
