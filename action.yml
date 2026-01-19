@@ -1,0 +1,33 @@
+name: 'Claude Code Orchestrator'
+description: 'Automatically break down GitHub issues into tasks and implement them using Claude Code'
+inputs:
+  issue-number:
+    description: 'The issue number to orchestrate'
+    required: true
+  repo-owner:
+    description: 'Repository owner (defaults to current repo)'
+    required: false
+  repo-name:
+    description: 'Repository name (defaults to current repo)'
+    required: false
+  github-token:
+    description: 'GitHub token with repo permissions'
+    required: true
+  claude-configs:
+    description: 'JSON array of Claude API configurations'
+    required: true
+  max-ems:
+    description: 'Maximum number of Engineering Managers'
+    required: false
+    default: '3'
+  max-workers-per-em:
+    description: 'Maximum number of Workers per EM'
+    required: false
+    default: '3'
+  dispatch-stagger-ms:
+    description: 'Delay between dispatching workflows'
+    required: false
+    default: '2000'
+runs:
+  using: 'node20'
+  main: 'dist/director/run.js'
