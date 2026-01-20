@@ -280,6 +280,20 @@ ${emTable}${finalPRSection}${errorSection}
 
 ${this.state.issue.body}
 
+**Understanding the Issue:**
+- This issue may contain test failures in various formats (Rust cargo, Jest, pytest, etc.)
+- Test names with timestamps like \`2026-01-20T13:03:40.5487877Z\` are Rust cargo test output
+- Look for patterns: failures sections, test names, module paths (e.g., \`solver::evaluate::tests::test_name\`)
+- If multiple test suites are failing (e.g., "Solver", "Binder", "Checker"), group related failures
+- Extract the core problem from the test failures - what actually needs to be fixed?
+
+**For Test Failure Issues:**
+- Group failing tests by the module/component they belong to
+- One EM per major component (e.g., "Solver tests", "Binder tests", "Checker tests")
+- Each EM should fix tests for their assigned module
+- Focus on the root cause - multiple tests may fail for the same reason
+- Estimated workers should be proportional to: (number of failing tests in group) / 10
+
 **Your task:**
 1. First, determine if this project needs initial setup (gitignore, package.json, tsconfig, etc.)
 2. Break this issue down into EM (Engineering Manager) tasks. Each EM focuses on a distinct area.
