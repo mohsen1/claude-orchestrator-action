@@ -135,27 +135,25 @@ export const GitOperations = {
                     // File might not exist or not be staged, that's ok
                 }
             }
-            // Commit
-            await execa('git', ['commit', '-m', message]);
-            // Push (to specific branch if provided as string, otherwise push current HEAD)
-            // Use force-with-lease to safely push even if remote diverged (from merged PRs)
-            if (typeof branchOrFiles === 'string') {
-                try {
-                    await execa('git', ['push', '-u', 'origin', branchOrFiles]);
-                }
-                catch {
-                    // If normal push fails, use force-with-lease (safe force push)
-                    await execa('git', ['push', '--force-with-lease', '-u', 'origin', branchOrFiles]);
-                }
+            // Check if there's anything staged to commit
+            const { stdout: stagedFiles } = await execa('git', ['diff', '--cached', '--name-only']);
+            const hasChanges = stagedFiles.trim().length > 0;
+            if (hasChanges) {
+                // Commit
+                await execa('git', ['commit', '-m', message]);
             }
             else {
-                try {
-                    await execa('git', ['push', '-u', 'origin', 'HEAD']);
-                }
-                catch {
-                    // If normal push fails, use force-with-lease (safe force push)
-                    await execa('git', ['push', '--force-with-lease', '-u', 'origin', 'HEAD']);
-                }
+                console.log('No files to commit (after excluding state file)');
+            }
+            // Push (to specific branch if provided as string, otherwise push current HEAD)
+            // Use force-with-lease to safely push even if remote diverged (from merged PRs)
+            const branchToPush = typeof branchOrFiles === 'string' ? branchOrFiles : 'HEAD';
+            try {
+                await execa('git', ['push', '-u', 'origin', branchToPush]);
+            }
+            catch {
+                // If normal push fails, use force-with-lease (safe force push)
+                await execa('git', ['push', '--force-with-lease', '-u', 'origin', branchToPush]);
             }
         }
         catch (error) {
