@@ -44,12 +44,38 @@ export class EventDrivenOrchestrator {
         });
     }
     /**
+     * Add error to history (preserves all errors)
+     */
+    addErrorToHistory(message, context) {
+        if (!this.state)
+            return;
+        if (!this.state.errorHistory) {
+            this.state.errorHistory = [];
+        }
+        this.state.errorHistory.push({
+            timestamp: new Date().toISOString(),
+            phase: this.state.phase,
+            message: message.substring(0, 500),
+            context
+        });
+    }
+    /**
      * Post or update progress comment on the issue
      */
     async updateProgressComment(error) {
         if (!this.state)
             return;
-        const { issue, ems, phase, workBranch, finalPr } = this.state;
+        // Add error to history if provided
+        if (error) {
+            this.addErrorToHistory(error);
+        }
+        const { issue, ems, phase, workBranch, finalPr, createdAt, errorHistory } = this.state;
+        // Calculate duration
+        const startTime = new Date(createdAt).getTime();
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        const minutes = Math.floor(elapsed / 60);
+        const seconds = elapsed % 60;
+        const durationStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
         // Build status emoji based on phase
         const phaseEmoji = {
             initialized: '🚀',
@@ -67,19 +93,23 @@ export class EventDrivenOrchestrator {
         };
         const statusEmoji = phaseEmoji[phase] || '📋';
         const phaseLabel = phase.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        // Count stats
+        const totalWorkers = ems.reduce((sum, em) => sum + em.workers.length, 0);
+        const mergedWorkers = ems.reduce((sum, em) => sum + em.workers.filter(w => w.status === 'merged').length, 0);
+        const mergedEMs = ems.filter(em => em.status === 'merged').length;
         // Build EM/Worker status table
         let emTable = '';
         if (ems.length > 0) {
             emTable = `\n### Teams & Workers\n\n| Team | Focus | Workers | Status |\n|------|-------|---------|--------|\n`;
             for (const em of ems) {
                 const completedWorkers = em.workers.filter(w => w.status === 'merged').length;
-                const totalWorkers = em.workers.length;
-                const workerStatus = totalWorkers > 0 ? `${completedWorkers}/${totalWorkers}` : 'Pending';
+                const totalEmWorkers = em.workers.length;
+                const workerStatus = totalEmWorkers > 0 ? `${completedWorkers}/${totalEmWorkers}` : 'Pending';
                 let emStatusDisplay = em.status;
                 if (em.status === 'merged')
                     emStatusDisplay = '✅ Merged';
                 else if (em.status === 'pr_created')
-                    emStatusDisplay = '🔄 PR Open';
+                    emStatusDisplay = '🔄 PR #' + (em.prNumber || '');
                 else if (em.status === 'workers_running')
                     emStatusDisplay = '⚙️ Working';
                 else if (em.status === 'workers_complete')
@@ -88,30 +118,42 @@ export class EventDrivenOrchestrator {
                     emStatusDisplay = '⏳ Pending';
                 emTable += `| EM-${em.id} | ${em.focusArea.substring(0, 30)}${em.focusArea.length > 30 ? '...' : ''} | ${workerStatus} | ${emStatusDisplay} |\n`;
             }
-            // Add worker details for active EM
-            const activeEM = ems.find(em => em.status === 'workers_running' || em.status === 'workers_complete');
-            if (activeEM && activeEM.workers.length > 0) {
-                emTable += `\n<details><summary>Worker Details for EM-${activeEM.id}</summary>\n\n`;
+            // Add worker details for ALL EMs that have workers
+            for (const em of ems.filter(e => e.workers.length > 0)) {
+                emTable += `\n<details><summary>Workers for EM-${em.id}: ${em.focusArea.substring(0, 25)}</summary>\n\n`;
                 emTable += `| Worker | Task | Status |\n|--------|------|--------|\n`;
-                for (const worker of activeEM.workers) {
+                for (const worker of em.workers) {
                     let wStatusDisplay = worker.status;
                     if (worker.status === 'merged')
-                        wStatusDisplay = '✅';
+                        wStatusDisplay = '✅ Merged';
                     else if (worker.status === 'pr_created')
-                        wStatusDisplay = '🔄 PR #' + (worker.prNumber || '');
+                        wStatusDisplay = `🔄 [PR #${worker.prNumber}](${worker.prUrl})`;
                     else if (worker.status === 'in_progress')
-                        wStatusDisplay = '⚙️';
+                        wStatusDisplay = '⚙️ Working';
+                    else if (worker.status === 'changes_requested')
+                        wStatusDisplay = '📝 Changes Requested';
                     else
-                        wStatusDisplay = '⏳';
+                        wStatusDisplay = '⏳ Pending';
                     emTable += `| W-${worker.id} | ${worker.task.substring(0, 40)}${worker.task.length > 40 ? '...' : ''} | ${wStatusDisplay} |\n`;
                 }
                 emTable += `\n</details>\n`;
             }
         }
-        // Build error section if there's an error
-        const errorSection = error
-            ? `\n### ⚠️ Error\n\`\`\`\n${error.substring(0, 500)}${error.length > 500 ? '...' : ''}\n\`\`\`\n`
-            : '';
+        // Build error history section (show ALL errors)
+        let errorSection = '';
+        if (errorHistory && errorHistory.length > 0) {
+            errorSection = `\n### ⚠️ Errors (${errorHistory.length})\n`;
+            errorSection += `<details><summary>Click to expand error log</summary>\n\n`;
+            for (const err of errorHistory) {
+                const errTime = new Date(err.timestamp).toISOString().substring(11, 19);
+                errorSection += `**[${errTime}] ${err.phase}**\n\`\`\`\n${err.message}\n\`\`\`\n`;
+                if (err.context) {
+                    errorSection += `Context: ${err.context}\n`;
+                }
+                errorSection += '\n';
+            }
+            errorSection += `</details>\n`;
+        }
         // Build final PR section
         const finalPRSection = finalPr
             ? `\n### Final PR\n[#${finalPr.number}](${finalPr.url}) - Reviews addressed: ${finalPr.reviewsAddressed || 0}\n`
@@ -121,8 +163,12 @@ export class EventDrivenOrchestrator {
 
 ${statusEmoji} **Phase:** ${phaseLabel}
 
-**Branch:** \`${workBranch}\`
-**EMs:** ${ems.length} | **Workers:** ${ems.reduce((sum, em) => sum + em.workers.length, 0)}
+| | |
+|---|---|
+| **Branch** | \`${workBranch}\` |
+| **Duration** | ${durationStr} |
+| **EMs** | ${mergedEMs}/${ems.length} merged |
+| **Workers** | ${mergedWorkers}/${totalWorkers} merged |
 ${emTable}${finalPRSection}${errorSection}
 ---
 *Last updated: ${new Date().toISOString()}*

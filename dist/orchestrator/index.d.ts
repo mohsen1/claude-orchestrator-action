@@ -41,6 +41,10 @@ export declare class EventDrivenOrchestrator {
     private state;
     constructor(ctx: OrchestratorContext);
     /**
+     * Add error to history (preserves all errors)
+     */
+    private addErrorToHistory;
+    /**
      * Post or update progress comment on the issue
      */
     private updateProgressComment;

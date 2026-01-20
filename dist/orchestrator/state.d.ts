@@ -75,6 +75,13 @@ export interface OrchestratorState {
     createdAt: string;
     updatedAt: string;
     error?: string;
+    errorHistory?: Array<{
+        timestamp: string;
+        phase: string;
+        message: string;
+        context?: string;
+    }>;
+    progressCommentId?: number;
 }
 /**
  * Create initial state when starting orchestration

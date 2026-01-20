@@ -131,6 +131,17 @@ export interface OrchestratorState {
   
   // Error info if failed
   error?: string;
+  
+  // Error history - preserved across the entire run
+  errorHistory?: Array<{
+    timestamp: string;
+    phase: string;
+    message: string;
+    context?: string;
+  }>;
+  
+  // Progress comment ID on the issue
+  progressCommentId?: number;
 }
 
 /**
