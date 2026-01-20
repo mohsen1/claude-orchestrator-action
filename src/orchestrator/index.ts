@@ -349,14 +349,18 @@ ${this.state.issue.body}
 - Project Setup EM should create ALL setup files: .gitignore, package.json, tsconfig.json
 - NO other EM should create setup files - they assume setup is done
 - Other EMs should wait until setup is complete
-- Scale team size based on complexity: simple tasks = 1-2 workers, complex = 2-3 workers
 - **EMs MUST have completely non-overlapping responsibilities and files**
 - Each EM owns specific files/directories that NO other EM touches
 - Example: EM-1 owns src/types.ts and src/storage.ts, EM-2 owns src/cli.ts and src/commands/
 
-**Constraints:**
-- Maximum ${maxEms} EMs (not counting setup)
+**Team Sizing - USE ALL AVAILABLE CAPACITY for complex tasks:**
+- You have up to ${maxEms} EMs available (not counting setup)
 - Each EM can have up to ${maxWorkersPerEm} Workers
+- For SIMPLE tasks (1-2 features): Use 1-2 EMs with 1-2 workers each
+- For MEDIUM tasks (3-5 features): Use 2-3 EMs with 2-3 workers each  
+- For COMPLEX tasks (many features, multiple layers): USE ALL ${maxEms} EMs with ${maxWorkersPerEm} workers each
+- More workers = faster completion but ensure non-overlapping work
+- When in doubt, USE MORE workers - parallelization speeds up delivery
 
 **Output ONLY a JSON object (no other text):**
 {
@@ -529,13 +533,19 @@ ${this.state.issue.body}
 ${this.state.issue.body}
 
 **CRITICAL Constraints:**
-- Maximum ${maxWorkersPerEm} workers
+- You can use up to ${maxWorkersPerEm} workers - USE MORE for complex tasks!
 - **EACH WORKER MUST HAVE COMPLETELY SEPARATE FILES** - NO overlap between workers!
 - If Worker-1 creates src/types.ts, NO other worker should touch that file
 - Each task should be completable independently without modifying other workers' files
 - Specify EXACTLY which files each worker should create or modify
 - Tasks should be concrete (e.g., "Create Calculator class in src/calculator.ts")
 - If a task requires multiple related files, assign them ALL to the SAME worker
+
+**Worker Sizing:**
+- Simple EM task: 1-2 workers
+- Medium EM task: 2-3 workers
+- Complex EM task: USE ALL ${maxWorkersPerEm} workers
+- More workers = parallel execution = faster delivery
 
 **Example of GOOD division:**
 - Worker-1: src/types.ts (types only)
@@ -925,28 +935,15 @@ Closes #${this.state.issue.number}
     await this.github.addLabels(pr.number, [this.state.config.prLabel]);
 
     this.state.finalPr = { number: pr.number, url: pr.html_url, reviewsAddressed: 0 };
-    this.state.phase = 'final_review';  // Wait for final review
+    this.state.phase = 'final_review';  // Stay in final_review to handle reviews
     
-    // Save state but don't commit - we'll remove the state file from the PR
-    await saveState(this.state);
-    await this.updateProgressComment();
-
-    // Remove state file from work branch (it shouldn't be in the final PR)
-    console.log('Removing orchestrator state file from work branch...');
-    await GitOperations.checkout(this.state.workBranch);
-    try {
-      await execa('git', ['rm', '-f', '.orchestrator/state.json']);
-      await execa('git', ['commit', '-m', 'chore: remove orchestrator state file']);
-      await GitOperations.push();
-    } catch (err) {
-      console.log('State file removal failed:', (err as Error).message);
-    }
-
-    // Update progress comment to show completion (uses same header to update, not create new)
-    this.state.phase = 'complete';
+    // Save state - keep state file to enable review handling
+    // State file will be removed when PR is merged (in handlePRMerged)
+    await saveState(this.state, 'chore: final PR created');
     await this.updateProgressComment();
 
     console.log(`Final PR created: ${pr.html_url}`);
+    console.log('Waiting for reviews. State preserved for review handling.');
   }
 
   /**
@@ -969,6 +966,24 @@ Closes #${this.state.issue.number}
     this.state = await this.loadStateFromWorkBranch(workBranch);
     if (!this.state) {
       console.log('No state found for work branch');
+      return;
+    }
+
+    // Check if this is the final PR being merged
+    if (this.state.finalPr?.number === event.prNumber) {
+      console.log('Final PR merged! Marking orchestration complete.');
+      this.state.phase = 'complete';
+      
+      // Remove state file from work branch
+      try {
+        await execa('git', ['rm', '-f', '.orchestrator/state.json']);
+        await execa('git', ['commit', '-m', 'chore: remove orchestrator state file']);
+        await GitOperations.push();
+      } catch (err) {
+        console.log('State file cleanup:', (err as Error).message);
+      }
+      
+      await this.updateProgressComment();
       return;
     }
 
