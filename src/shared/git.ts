@@ -53,15 +53,52 @@ export const GitOperations = {
         // File might not exist, that's ok
       }
       
-      // Fetch the base branch
-      await execa('git', ['fetch', 'origin', fromBranch]);
+      // Delete local branch if it exists (to ensure fresh state)
+      try {
+        await execa('git', ['branch', '-D', branchName]);
+      } catch {
+        // Branch might not exist locally, that's fine
+      }
+      
+      // Try to fetch the base branch from remote
+      let hasRemoteBase = false;
+      try {
+        await execa('git', ['fetch', 'origin', fromBranch]);
+        hasRemoteBase = true;
+      } catch {
+        // Base branch might not exist on remote yet - check if it exists locally
+        try {
+          await execa('git', ['rev-parse', '--verify', fromBranch]);
+          // Branch exists locally, use it
+          console.log(`  Base branch ${fromBranch} not on remote, using local`);
+        } catch {
+          // Try fetching all to see if we can find it
+          try {
+            await execa('git', ['fetch', '--all']);
+            await execa('git', ['fetch', 'origin', fromBranch]);
+            hasRemoteBase = true;
+          } catch {
+            throw new Error(`Base branch ${fromBranch} not found locally or on remote`);
+          }
+        }
+      }
 
       // Create and checkout the new branch
-      await execa('git', ['checkout', '-B', branchName, `origin/${fromBranch}`]);
+      if (hasRemoteBase) {
+        await execa('git', ['checkout', '-B', branchName, `origin/${fromBranch}`]);
+      } else {
+        // Use local branch as base
+        await execa('git', ['checkout', fromBranch]);
+        await execa('git', ['checkout', '-B', branchName]);
+      }
 
-      // Set up tracking if fromBranch is not main
+      // Set up tracking to main for merging purposes
       if (fromBranch !== 'main') {
-        await execa('git', ['branch', '--set-upstream-to=origin/main', branchName]);
+        try {
+          await execa('git', ['branch', '--set-upstream-to=origin/main', branchName]);
+        } catch {
+          // Might fail if main doesn't exist, that's ok
+        }
       }
     } catch (error) {
       throw new Error(
@@ -473,8 +510,25 @@ export const GitOperations = {
       try {
         await execa('git', ['push', '-u', 'origin', target]);
       } catch (firstError) {
-        // If normal push fails, try pull-rebase then push (avoid force-push which can close PRs)
-        console.log(`Normal push failed: ${(firstError as Error).message.substring(0, 100)}. Trying pull-rebase...`);
+        const errorMsg = (firstError as Error).message;
+        console.log(`Normal push failed: ${errorMsg.substring(0, 100)}`);
+        
+        // Check if this is a non-fast-forward error (divergent history from stale branches)
+        if (errorMsg.includes('non-fast-forward') || errorMsg.includes('rejected')) {
+          // For orchestrator branches (cco/*), force push is acceptable
+          // These branches are owned by CCO and divergent history means a previous run left stale state
+          if (target.includes('cco/')) {
+            console.log('  Divergent history on CCO branch. Using force push...');
+            try {
+              await execa('git', ['push', '--force-with-lease', '-u', 'origin', target]);
+              return;
+            } catch {
+              // If force-with-lease fails, use regular force
+              await execa('git', ['push', '--force', '-u', 'origin', target]);
+              return;
+            }
+          }
+        }
         
         // Clean up any broken state first
         await this.cleanupGitState();
@@ -484,7 +538,6 @@ export const GitOperations = {
           await execa('git', ['pull', '--rebase', 'origin', target]);
           await execa('git', ['push', '-u', 'origin', target]);
         } catch (rebaseError) {
-          // If pull-rebase fails, abort and try hard reset to remote then push
           console.log(`Pull-rebase failed: ${(rebaseError as Error).message.substring(0, 100)}`);
           
           // Abort any stuck rebase
@@ -494,15 +547,20 @@ export const GitOperations = {
             // No rebase in progress
           }
           
-          // If branch doesn't exist remotely, just push
-          try {
-            await execa('git', ['push', '-u', 'origin', target]);
-          } catch (finalError) {
-            // Final attempt: hard reset to remote and push
-            console.log('Final attempt: hard reset to current HEAD and push...');
-            const currentCommit = (await execa('git', ['rev-parse', 'HEAD'])).stdout.trim();
-            await execa('git', ['reset', '--hard', currentCommit]);
-            await execa('git', ['push', '-u', 'origin', target]);
+          // For cco branches, force push as last resort
+          if (target.includes('cco/')) {
+            console.log('  Final attempt: force push for CCO branch...');
+            await execa('git', ['push', '--force', '-u', 'origin', target]);
+          } else {
+            // For non-cco branches, try regular push
+            try {
+              await execa('git', ['push', '-u', 'origin', target]);
+            } catch (finalError) {
+              console.log('Final attempt: hard reset to current HEAD and push...');
+              const currentCommit = (await execa('git', ['rev-parse', 'HEAD'])).stdout.trim();
+              await execa('git', ['reset', '--hard', currentCommit]);
+              await execa('git', ['push', '-u', 'origin', target]);
+            }
           }
         }
       }
