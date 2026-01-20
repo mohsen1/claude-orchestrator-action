@@ -115,14 +115,29 @@ export const GitOperations = {
     async pull(branchName) {
         try {
             if (branchName) {
-                await execa('git', ['pull', 'origin', branchName]);
+                // Use --rebase to handle divergent branches
+                await execa('git', ['pull', '--rebase', 'origin', branchName]);
             }
             else {
-                await execa('git', ['pull']);
+                await execa('git', ['pull', '--rebase']);
             }
         }
         catch (error) {
-            throw new Error(`Failed to pull branch: ${error.message}`);
+            // If rebase fails, try to abort and do a hard reset to remote
+            console.log('Pull with rebase failed, trying hard reset to remote...');
+            try {
+                await execa('git', ['rebase', '--abort']);
+            }
+            catch {
+                // Rebase might not be in progress
+            }
+            if (branchName) {
+                await execa('git', ['fetch', 'origin', branchName]);
+                await execa('git', ['reset', '--hard', `origin/${branchName}`]);
+            }
+            else {
+                throw new Error(`Failed to pull branch: ${error.message}`);
+            }
         }
     },
     /**
