@@ -702,16 +702,26 @@ Closes #${this.state.issue.number}
      */
     async addressReview(branch, prNumber, reviewBody) {
         await GitOperations.checkout(branch);
-        // Get inline review comments
+        // Get inline review comments (code comments)
         const reviewComments = await this.github.getPullRequestComments(prNumber);
-        // Process each inline comment individually
+        // Get general PR comments (issue-style comments)
+        const prComments = await this.github.getPullRequestIssueComments(prNumber);
+        // Process inline comments individually
         if (reviewComments.length > 0) {
-            console.log(`Processing ${reviewComments.length} inline comments...`);
+            console.log(`Processing ${reviewComments.length} inline code comments...`);
             await this.processInlineComments(prNumber, reviewComments, branch);
         }
-        // If there's also a general review body, address it
+        // Process general PR comments
+        const actionableComments = prComments.filter(c => c.user !== 'github-actions[bot]' &&
+            !c.body.includes('Automated by Claude') &&
+            c.body.length > 10);
+        if (actionableComments.length > 0) {
+            console.log(`Processing ${actionableComments.length} general PR comments...`);
+            await this.processGeneralPRComments(prNumber, actionableComments, branch);
+        }
+        // If there's also a review body, address it
         if (reviewBody && reviewBody.trim().length > 20) {
-            console.log('Addressing general review feedback...');
+            console.log('Addressing review body feedback...');
             await this.addressGeneralReviewFeedback(branch, reviewBody);
         }
         // Commit and push any remaining changes
@@ -722,6 +732,63 @@ Closes #${this.state.issue.number}
         }
         else {
             console.log('All review comments handled');
+        }
+    }
+    /**
+     * Process general PR comments (not inline code comments)
+     */
+    async processGeneralPRComments(prNumber, comments, _branch) {
+        for (const comment of comments) {
+            console.log(`\n  Processing general comment from ${comment.user}`);
+            console.log(`  Comment: "${comment.body.substring(0, 100)}${comment.body.length > 100 ? '...' : ''}"`);
+            // Analyze if comment is actionable
+            const analysisPrompt = `Analyze this general PR comment and determine if it requires code changes.
+
+**Comment from ${comment.user}:** ${comment.body}
+
+Respond in JSON format only:
+{
+  "actionable": true or false,
+  "reason": "Brief explanation",
+  "suggestedAction": "If actionable, what should be done"
+}
+
+A comment is actionable if it requests specific code changes (e.g., "use latest packages", "add error handling").
+A comment is NOT actionable if it's just a question, acknowledgment, or general discussion.`;
+            const analysis = await this.sdkRunner.executeTask(analysisPrompt);
+            let isActionable = false;
+            let reason = '';
+            let suggestedAction = '';
+            try {
+                const jsonMatch = analysis.output?.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                    const parsed = JSON.parse(jsonMatch[0]);
+                    isActionable = parsed.actionable === true;
+                    reason = parsed.reason || '';
+                    suggestedAction = parsed.suggestedAction || '';
+                }
+            }
+            catch {
+                isActionable = true;
+                reason = 'Could not parse, treating as actionable';
+            }
+            if (isActionable) {
+                console.log(`  -> Actionable: ${reason}`);
+                const fixPrompt = `Address this PR comment by making the necessary code changes.
+
+**Comment:** ${comment.body}
+**Suggested Action:** ${suggestedAction}
+
+Make the changes now. Focus on what the comment is asking for.`;
+                await this.sdkRunner.executeTask(fixPrompt);
+                // Reply to the comment
+                await this.github.addPullRequestComment(prNumber, `Addressed: ${suggestedAction || 'Made the requested changes.'}\n\n_Automated response_`);
+                console.log(`  -> Fixed and replied`);
+            }
+            else {
+                console.log(`  -> Not actionable: ${reason}`);
+                await this.github.addPullRequestComment(prNumber, `Thank you for the feedback. ${reason}\n\n_Automated response_`);
+            }
         }
     }
     /**
@@ -826,16 +893,27 @@ ${reviewBody}
         if (!this.state)
             throw new Error('No state');
         await GitOperations.checkout(this.state.workBranch);
-        // Get inline review comments
+        // Get inline review comments (code comments)
         const reviewComments = await this.github.getPullRequestComments(prNumber);
-        // Process each inline comment individually
+        // Get general PR comments (issue-style comments)
+        const prComments = await this.github.getPullRequestIssueComments(prNumber);
+        // Process inline comments individually
         if (reviewComments.length > 0) {
-            console.log(`Processing ${reviewComments.length} inline comments on final PR...`);
+            console.log(`Processing ${reviewComments.length} inline code comments on final PR...`);
             await this.processInlineComments(prNumber, reviewComments, this.state.workBranch);
         }
-        // If there's also a general review body, address it
+        // Process general PR comments
+        const actionableComments = prComments.filter(c => c.user !== 'github-actions[bot]' &&
+            !c.body.includes('Automated by Claude') &&
+            !c.body.includes('_Automated response_') &&
+            c.body.length > 10);
+        if (actionableComments.length > 0) {
+            console.log(`Processing ${actionableComments.length} general PR comments on final PR...`);
+            await this.processGeneralPRComments(prNumber, actionableComments, this.state.workBranch);
+        }
+        // If there's also a review body, address it
         if (reviewBody && reviewBody.trim().length > 20) {
-            console.log('Addressing general review feedback on final PR...');
+            console.log('Addressing review body feedback on final PR...');
             await this.addressGeneralReviewFeedback(this.state.workBranch, reviewBody);
         }
         // Commit and push any remaining changes

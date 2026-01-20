@@ -518,5 +518,28 @@ export class GitHubClient {
             throw new Error(`Failed to add comment to PR #${prNumber}: ${error.message}`);
         }
     }
+    /**
+     * Get all issue-style comments on a PR (general comments, not inline review comments)
+     * @param prNumber - PR number
+     * @returns Array of comments
+     */
+    async getPullRequestIssueComments(prNumber) {
+        try {
+            const { data } = await this.octokit.rest.issues.listComments({
+                owner: this.getRepo().owner,
+                repo: this.getRepo().repo,
+                issue_number: prNumber
+            });
+            return data.map(comment => ({
+                id: comment.id,
+                user: comment.user?.login || 'unknown',
+                body: comment.body || '',
+                createdAt: comment.created_at
+            }));
+        }
+        catch (error) {
+            throw new Error(`Failed to get PR comments: ${error.message}`);
+        }
+    }
 }
 //# sourceMappingURL=github.js.map

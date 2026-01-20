@@ -207,5 +207,16 @@ export declare class GitHubClient {
      * @returns void
      */
     addPullRequestComment(prNumber: number, body: string): Promise<void>;
+    /**
+     * Get all issue-style comments on a PR (general comments, not inline review comments)
+     * @param prNumber - PR number
+     * @returns Array of comments
+     */
+    getPullRequestIssueComments(prNumber: number): Promise<Array<{
+        id: number;
+        user: string;
+        body: string;
+        createdAt: string;
+    }>>;
 }
 //# sourceMappingURL=github.d.ts.map

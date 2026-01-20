@@ -146,13 +146,19 @@ export const GitOperations = {
                 console.log('No files to commit (after excluding state file)');
             }
             // Push (to specific branch if provided as string, otherwise push current HEAD)
-            // Use force-with-lease to safely push even if remote diverged (from merged PRs)
             const branchToPush = typeof branchOrFiles === 'string' ? branchOrFiles : 'HEAD';
             try {
                 await execa('git', ['push', '-u', 'origin', branchToPush]);
             }
             catch {
-                // If normal push fails, use force-with-lease (safe force push)
+                // If normal push fails, fetch and try force-with-lease
+                console.log('Normal push failed, fetching and retrying with force-with-lease...');
+                try {
+                    await execa('git', ['fetch', 'origin']);
+                }
+                catch {
+                    // Fetch might fail if branch doesn't exist remotely yet, that's ok
+                }
                 await execa('git', ['push', '--force-with-lease', '-u', 'origin', branchToPush]);
             }
         }
