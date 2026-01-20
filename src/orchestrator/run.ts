@@ -4,12 +4,20 @@
  * 
  * Called by GitHub workflows on various events.
  * Reads event type and payload from environment, dispatches to orchestrator.
+ * 
+ * IMPORTANT: This is designed to be truly event-driven.
+ * Each invocation handles ONE event, updates state, and exits.
+ * Long-running operations should trigger new workflow events.
  */
 
 import { EventDrivenOrchestrator, EventType, OrchestratorEvent } from './index.js';
 import type { ClaudeConfig } from '../shared/config.js';
+import { GitHubClient } from '../shared/github.js';
+import { initDebugLogger, debugLog, flushDebugLog, debugLogError } from '../shared/debug-log.js';
 
 async function main() {
+  const startTime = Date.now();
+  
   // Get required environment variables
   const token = process.env.GITHUB_TOKEN || process.env.CCO_PAT;
   if (!token) {
@@ -32,16 +40,34 @@ async function main() {
   const reviewState = process.env.REVIEW_STATE as 'approved' | 'changes_requested' | 'commented' | undefined;
   const reviewBody = process.env.REVIEW_BODY || undefined;
 
+  // Check debug mode
+  const debugEnabled = process.env.CCO_DEBUG === 'true';
+
+  // Initialize debug logger early
+  const github = new GitHubClient(token, { owner: repoOwner, repo: repoName });
+  const debugLogger = initDebugLogger(github, debugEnabled, issueNumber);
+
+  await debugLog('orchestrator_start', {
+    eventType,
+    issueNumber,
+    prNumber,
+    branch,
+    reviewState: reviewState || null,
+    runId: process.env.GITHUB_RUN_ID
+  });
+
   // Parse Claude configs
   const configsJson = process.env.CLAUDE_CONFIGS || '[]';
   let configs: ClaudeConfig[];
   try {
     configs = JSON.parse(configsJson);
   } catch (e) {
+    await debugLogError('config_parse_error', e as Error);
     throw new Error(`Failed to parse CLAUDE_CONFIGS: ${(e as Error).message}`);
   }
 
   if (!Array.isArray(configs) || configs.length === 0) {
+    await debugLogError('config_validation_error', 'CLAUDE_CONFIGS must be a non-empty JSON array');
     throw new Error('CLAUDE_CONFIGS must be a non-empty JSON array');
   }
 
@@ -54,9 +80,12 @@ async function main() {
   console.log('Event-Driven Orchestrator starting...');
   console.log(`  Event: ${eventType}`);
   console.log(`  Repo: ${repoOwner}/${repoName}`);
+  console.log(`  Debug: ${debugEnabled ? 'ENABLED' : 'disabled'}`);
   if (issueNumber) console.log(`  Issue: #${issueNumber}`);
   if (prNumber) console.log(`  PR: #${prNumber}`);
   if (branch) console.log(`  Branch: ${branch}`);
+
+  await debugLog('config_loaded', { maxEms, maxWorkersPerEm, reviewWaitMinutes, prLabel });
 
   // Create orchestrator
   const orchestrator = new EventDrivenOrchestrator({
@@ -77,12 +106,33 @@ async function main() {
   };
 
   // Handle event
-  await orchestrator.handleEvent(event);
+  try {
+    await debugLog('event_handler_start', { eventType });
+    await orchestrator.handleEvent(event);
+    await debugLog('event_handler_complete', { 
+      eventType,
+      duration: Date.now() - startTime 
+    });
+  } catch (error) {
+    await debugLogError('event_handler_error', error as Error);
+    throw error;
+  } finally {
+    // Always flush debug logs before exiting
+    const summary = debugLogger.getSummary();
+    await debugLog('orchestrator_exit', {
+      totalDuration: Date.now() - startTime,
+      logEvents: summary.events,
+      errors: summary.errors
+    });
+    await flushDebugLog();
+  }
 
-  console.log('\nEvent handling complete');
+  console.log(`\nEvent handling complete (${Date.now() - startTime}ms)`);
 }
 
-main().catch(error => {
+main().catch(async error => {
   console.error('Orchestrator failed:', error);
+  await debugLogError('fatal_error', error);
+  await flushDebugLog();
   process.exit(1);
 });

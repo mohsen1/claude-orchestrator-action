@@ -58,6 +58,10 @@ export declare class EventDrivenOrchestrator {
     private updateProgressComment;
     /**
      * Main entry point - handle an event
+     *
+     * IMPORTANT: This method should handle ONE event and exit.
+     * Long-running work is done by Claude, and state is persisted.
+     * The next event (PR merge, review, etc.) triggers the next step.
      */
     handleEvent(event: OrchestratorEvent): Promise<void>;
     /**

@@ -34,6 +34,7 @@ import {
   phaseToLabel,
   ORCHESTRATOR_COMMENT_MARKER
 } from '../shared/labels.js';
+import { debugLog } from '../shared/debug-log.js';
 
 export type EventType = 
   | 'issue_labeled'        // Start orchestration
@@ -120,7 +121,14 @@ export class EventDrivenOrchestrator {
   private async setPhase(phase: OrchestratorState['phase']): Promise<void> {
     if (!this.state) return;
     
+    const previousPhase = this.state.phase;
     this.state.phase = phase;
+    
+    await debugLog('phase_transition', { 
+      from: previousPhase, 
+      to: phase,
+      issueNumber: this.state.issue.number 
+    }, phase);
     
     // Update the phase label on the issue
     const phaseLabel = phaseToLabel(phase);
@@ -348,23 +356,38 @@ ${emTable}${finalPRSection}${errorSection}
 
   /**
    * Main entry point - handle an event
+   * 
+   * IMPORTANT: This method should handle ONE event and exit.
+   * Long-running work is done by Claude, and state is persisted.
+   * The next event (PR merge, review, etc.) triggers the next step.
    */
   async handleEvent(event: OrchestratorEvent): Promise<void> {
     console.log(`\n=== Handling event: ${event.type} ===`);
     console.log(`Event details:`, JSON.stringify(event, null, 2));
 
+    await debugLog('handle_event_start', { 
+      type: event.type,
+      issueNumber: event.issueNumber,
+      prNumber: event.prNumber,
+      branch: event.branch
+    });
+
     try {
       switch (event.type) {
         case 'issue_labeled':
+          await debugLog('dispatch_issue_labeled');
           await this.handleIssueLabeled(event);
           break;
         case 'issue_closed':
+          await debugLog('dispatch_issue_closed');
           await this.handleIssueClosed(event);
           break;
         case 'pull_request_merged':
+          await debugLog('dispatch_pr_merged', { prNumber: event.prNumber });
           await this.handlePRMerged(event);
           break;
         case 'pull_request_review':
+          await debugLog('dispatch_pr_review', { prNumber: event.prNumber, reviewState: event.reviewState });
           await this.handlePRReview(event);
           break;
         case 'workflow_dispatch':
@@ -372,23 +395,37 @@ ${emTable}${finalPRSection}${errorSection}
           if (event.issueNumber) {
             const existingBranch = await findWorkBranchForIssue(event.issueNumber);
             if (existingBranch) {
+              await debugLog('dispatch_progress_check', { existingBranch });
               await this.handleProgressCheck({ ...event, branch: existingBranch });
             } else {
+              await debugLog('dispatch_new_orchestration');
               // No existing branch - start new orchestration
               await this.handleIssueLabeled(event);
             }
           } else {
+            await debugLog('dispatch_progress_check', { branch: event.branch });
             await this.handleProgressCheck(event);
           }
           break;
         case 'schedule':
+          await debugLog('dispatch_schedule');
           await this.handleProgressCheck(event);
           break;
         default:
+          await debugLog('dispatch_unhandled', { type: event.type });
           console.log(`Unhandled event type: ${event.type}`);
       }
+      
+      await debugLog('handle_event_complete', { 
+        type: event.type,
+        phase: this.state?.phase 
+      });
     } catch (error) {
       console.error('Event handling failed:', error);
+      await debugLog('handle_event_error', { 
+        type: event.type,
+        error: (error as Error).message 
+      });
       if (this.state) {
         await this.setPhase('failed');
         this.state.error = (error as Error).message;
