@@ -288,6 +288,22 @@ jobs:
       cancel-in-progress: false
 ```
 
+### Hardening & Operations
+
+- **Dispatch rate limits / fan-out:** Add backoff + jitter when dispatching many jobs; cap concurrent dispatches per issue; respect GitHub Actions rate limits and per-repo concurrency.
+- **Dispatch retries & idempotency:** Wrap `createWorkflowDispatch` with retries; include an idempotency token (e.g., `${issue}-${em}-${worker}`) and store it to avoid duplicate branch/PR creation.
+- **State merge semantics:** Deterministic merge keyed by EM/worker IDs; detect conflicting edits (version/updatedAt per node); last-writer-wins only on leaf fields; fail fast on incompatible changes.
+- **Idempotent handlers:** Before creating branches/PRs, check if they already exist; short-circuit if state already reflects completion; ensure retries do not duplicate resources.
+- **Event de-duplication:** Guard against double-processing from both internal dispatch and external PR events; define which handlers mutate state vs. only observe; suppress duplicate transitions.
+- **Git/branch concurrency:** Serialize git operations per branch (EM/worker) even if multiple jobs run; keep concurrency groups per branch for git actions to avoid push conflicts.
+- **Review gating policy:** Define approval requirements (e.g., Copilot review + zero change requests); timeouts and re-requests; auto-merge only after checks pass.
+- **Aggregation guards:** Create EM PR only after all its workers are merged; create final PR only after all EM PRs are merged; enforce mergeability checks/rebase before merge.
+- **Retry policy:** Classify transient vs. permanent errors; cap retries (e.g., 3) with backoff (1m/5m/15m); record retry counts in state.
+- **Claude/API concurrency caps:** Limit parallel Claude SDK calls to avoid rate limiting; consider token budgeting per run.
+- **Observability:** Keep phase labels plus per-handler debug logs; add summary counters (running/failed/succeeded) to progress comment; continue logging to the debug issue.
+- **Cleanup on issue_closed:** Ensure the cleanup handler remains fast-exit: close PRs, delete branches, remove cco labels, drop orchestrator comment.
+- **Input validation/security:** Validate workflow_dispatch inputs (issue/em/worker IDs) against state; ignore stale or unknown dispatches.
+
 ### Error Handling and Retries
 
 ```typescript
@@ -329,11 +345,13 @@ async handleExecuteWorker(event: OrchestratorEvent): Promise<void> {
 
 ### Migration Path
 
-1. **Phase 1:** Add dispatch helper and new event types
-2. **Phase 2:** Refactor `handleIssueLabeled` to only analyze
-3. **Phase 3:** Implement `start_em` and `execute_worker` handlers
-4. **Phase 4:** Update workflow to accept new dispatch events
-5. **Phase 5:** Remove long-running code paths
+1. **Phase 1:** Add dispatch helper with retries/idempotency; define new event types
+2. **Phase 2:** Make `handleIssueLabeled` analyze-only and exit; add concurrency groups
+3. **Phase 3:** Implement `start_em` (idempotent, branch-serialization) and `execute_worker` (idempotent, branch/PR existence checks) with state merge safeguards
+4. **Phase 4:** Update workflow YAML for new dispatch inputs and input validation; add Claude concurrency caps
+5. **Phase 5:** Add aggregation handlers (`create_em_pr`, `check_completion`) with mergeability guards and review gating policy
+6. **Phase 6:** Add retry/backoff policy across handlers; finalize state merge conflict detection
+7. **Phase 7:** Remove legacy long-running paths and confirm cleanup-on-issue_closed remains fast
 
 ### Example: Full Orchestration Timeline
 
@@ -370,16 +388,20 @@ Total: ~5-6 minutes wall-clock time
 ## Implementation Checklist
 
 - [ ] Add `dispatchEvent` helper to GitHubClient
+- [ ] Add retries/backoff + idempotency token to dispatches
 - [ ] Define new event types in `OrchestratorEvent`
 - [ ] Refactor `handleIssueLabeled` to exit after analysis
-- [ ] Implement `handleStartEM` handler
-- [ ] Implement `handleExecuteWorker` handler  
+- [ ] Implement `handleStartEM` handler (idempotent, branch-serialized)
+- [ ] Implement `handleExecuteWorker` handler (idempotent branch/PR creation)  
 - [ ] Implement `handleCreateEMPR` handler
 - [ ] Implement `handleCheckCompletion` handler
 - [ ] Update workflow YAML with new dispatch inputs
-- [ ] Add concurrency groups
-- [ ] Update state merge logic for parallel updates
-- [ ] Add retry mechanism with exponential backoff
+- [ ] Add concurrency groups (issue/em/worker; branch-serialized git ops)
+- [ ] Update state merge logic for deterministic, conflict-aware merges
+- [ ] Add retry mechanism with exponential backoff and error classification
+- [ ] Add review gating policy (Copilot/human, timeouts)
+- [ ] Add mergeability guards for EM/final PRs
+- [ ] Add Claude/API concurrency caps
 - [ ] Update debug logging for new event types
 - [ ] Write tests for each handler in isolation
 
