@@ -31,7 +31,7 @@ on:
         description: 'Maximum number of Engineering Managers'
         required: false
         type: string
-        default: '3'
+        default: '10'
       max_workers_per_em:
         description: 'Maximum Workers per EM'
         required: false
