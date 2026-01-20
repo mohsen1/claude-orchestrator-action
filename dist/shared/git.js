@@ -125,7 +125,15 @@ export const GitOperations = {
                 await execa('git', ['add', ...branchOrFiles]);
             }
             else {
+                // Add all except state file (state is managed separately on work branch only)
                 await execa('git', ['add', '-A']);
+                // Unstage state file if it was staged
+                try {
+                    await execa('git', ['reset', 'HEAD', '.orchestrator/state.json']);
+                }
+                catch {
+                    // File might not exist or not be staged, that's ok
+                }
             }
             // Commit
             await execa('git', ['commit', '-m', message]);

@@ -147,10 +147,13 @@ ${this.state.issue.body}
 
 **Important Guidelines:**
 - If this is a new project, include a "Project Setup" EM (id: 0) that runs FIRST
-- Project Setup EM should create: .gitignore, package.json, tsconfig.json, basic folder structure
+- Project Setup EM should create ALL setup files: .gitignore, package.json, tsconfig.json
+- NO other EM should create setup files - they assume setup is done
 - Other EMs should wait until setup is complete
 - Scale team size based on complexity: simple tasks = 1-2 workers, complex = 2-3 workers
-- EMs should have non-overlapping responsibilities
+- **EMs MUST have completely non-overlapping responsibilities and files**
+- Each EM owns specific files/directories that NO other EM touches
+- Example: EM-1 owns src/types.ts and src/storage.ts, EM-2 owns src/cli.ts and src/commands/
 
 **Constraints:**
 - Maximum ${maxEms} EMs (not counting setup)
@@ -288,18 +291,30 @@ ${this.state.issue.body}
 **Context - Original Issue:**
 ${this.state.issue.body}
 
-**Constraints:**
+**CRITICAL Constraints:**
 - Maximum ${maxWorkersPerEm} workers
-- Each task should be completable independently
-- Specify which files each worker should create or modify
-- Tasks should be concrete (e.g., "Create Calculator class with add/subtract methods")
+- **EACH WORKER MUST HAVE COMPLETELY SEPARATE FILES** - NO overlap between workers!
+- If Worker-1 creates src/types.ts, NO other worker should touch that file
+- Each task should be completable independently without modifying other workers' files
+- Specify EXACTLY which files each worker should create or modify
+- Tasks should be concrete (e.g., "Create Calculator class in src/calculator.ts")
+- If a task requires multiple related files, assign them ALL to the SAME worker
+
+**Example of GOOD division:**
+- Worker-1: src/types.ts (types only)
+- Worker-2: src/storage.ts (storage only, imports from types.ts but doesn't modify it)  
+- Worker-3: src/notes.ts (notes only, imports from types.ts and storage.ts)
+
+**Example of BAD division:**
+- Worker-1: src/types.ts
+- Worker-2: src/types.ts, src/storage.ts  <- BAD! Overlaps with Worker-1
 
 **Output ONLY a JSON array (no other text):**
 [
   {
     "worker_id": 1,
-    "task": "Specific task description with implementation details",
-    "files": ["path/to/file1.ts", "path/to/file2.ts"]
+    "task": "Specific task with EXACT files this worker will create/modify",
+    "files": ["path/to/file1.ts"]
   }
 ]`;
         const sessionId = generateSessionId('em', this.state.issue.number, em.id);

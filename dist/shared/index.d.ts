@@ -1,4 +1,3 @@
-export * from './state.js';
 export * from './branches.js';
 export * from './config.js';
 export * from './github.js';

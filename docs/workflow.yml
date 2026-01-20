@@ -5,8 +5,8 @@
 #
 # Required secrets:
 #   - CLAUDE_CONFIGS: JSON array of Claude API configurations
-#     Example: [{"env":{"ANTHROPIC_AUTH_TOKEN":"your-key","ANTHROPIC_BASE_URL":"https://api.z.ai/api/anthropic"}}]
-#   - CCO_PAT: GitHub PAT with repo permissions
+#     Example: [{"apiKey":"sk-ant-xxx","model":"claude-sonnet-4-20250514"}]
+#   - CCO_PAT: GitHub PAT with repo and workflow permissions
 #
 # Configuration:
 #   - trigger_label: Label that triggers orchestration (default: 'cco')
@@ -16,7 +16,12 @@
 #   1. Add this workflow to your repo
 #   2. Create an issue describing what you want built
 #   3. Add the trigger label (default: 'cco') to start orchestration
-#   4. All automated PRs will have the pr_label for easy identification
+#   4. The system will:
+#      - Analyze the issue
+#      - Break it into tasks
+#      - Execute with AI workers
+#      - Create PRs for review
+#      - Respond to code review feedback
 
 name: Claude Orchestrator
 
@@ -25,11 +30,11 @@ on:
   issues:
     types: [labeled]
   
-  # Wake up when PR is merged (to continue work)
+  # Continue when PR is merged (to process next steps)
   pull_request:
     types: [closed]
   
-  # Wake up when review is submitted
+  # Handle code review feedback
   pull_request_review:
     types: [submitted]
   
@@ -46,21 +51,16 @@ permissions:
   issues: write
   pull-requests: write
 
-# Configure your trigger and PR labels here
-env:
-  TRIGGER_LABEL: 'cco'  # Change this to use a different trigger label
-  PR_LABEL: 'cco'       # Label added to all orchestrator PRs
-
 jobs:
-  # Start new orchestration when issue is labeled with trigger label
+  # Start new orchestration when issue is labeled with 'cco'
   start:
-    if: github.event_name == 'issues' && github.event.label.name == 'cco'  # Match TRIGGER_LABEL
+    if: github.event_name == 'issues' && github.event.label.name == 'cco'
     uses: mohsen1/claude-orchestrator-action/.github/workflows/orchestrate.yml@main
     with:
       event_type: 'issue_labeled'
       issue_number: ${{ github.event.issue.number }}
-      trigger_label: 'cco'  # Match TRIGGER_LABEL
-      pr_label: 'cco'       # Match PR_LABEL
+      trigger_label: 'cco'
+      pr_label: 'cco'
     secrets:
       CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
       CCO_PAT: ${{ secrets.CCO_PAT }}
@@ -81,7 +81,7 @@ jobs:
       CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
       CCO_PAT: ${{ secrets.CCO_PAT }}
 
-  # Handle review (only for cco/* branches with changes_requested)
+  # Handle code review (only for cco/* branches with changes_requested)
   on-review:
     if: |
       github.event_name == 'pull_request_review' && 
@@ -99,7 +99,7 @@ jobs:
       CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
       CCO_PAT: ${{ secrets.CCO_PAT }}
 
-  # Manual trigger for recovery
+  # Manual trigger for recovery or debugging
   manual:
     if: github.event_name == 'workflow_dispatch'
     uses: mohsen1/claude-orchestrator-action/.github/workflows/orchestrate.yml@main
