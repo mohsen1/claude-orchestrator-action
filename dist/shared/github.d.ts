@@ -50,13 +50,18 @@ export declare class GitHubClient {
      */
     private getRepo;
     /**
-     * Dispatch a workflow
+     * Dispatch a workflow with retry logic and idempotency
      * @param workflowId - Workflow filename or ID
      * @param ref - Git ref to run against
      * @param inputs - Workflow inputs
+     * @param options - Optional retry and idempotency options
      * @returns void
      */
-    dispatchWorkflow(workflowId: string, ref: string, inputs: WorkflowDispatchInputs): Promise<void>;
+    dispatchWorkflow(workflowId: string, ref: string, inputs: WorkflowDispatchInputs, options?: {
+        maxRetries?: number;
+        retryDelayMs?: number;
+        idempotencyToken?: string;
+    }): Promise<void>;
     /**
      * Create a Git branch
      * @param branchName - Name of the branch to create

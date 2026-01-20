@@ -46,6 +46,58 @@ export class EventDrivenOrchestrator {
         });
     }
     /**
+     * Dispatch an internal event via workflow_dispatch
+     * Generates idempotency token and handles retries
+     */
+    async dispatchEvent(eventType, inputs) {
+        if (!this.state) {
+            throw new Error('Cannot dispatch event: no state loaded');
+        }
+        // Generate idempotency token: eventType-issue-em-worker-timestamp
+        const tokenParts = [
+            eventType,
+            inputs.issue_number,
+            inputs.em_id ?? 'none',
+            inputs.worker_id ?? 'none',
+            Date.now()
+        ];
+        const idempotencyToken = tokenParts.join('-');
+        const workflowInputs = {
+            event_type: eventType,
+            issue_number: inputs.issue_number.toString(),
+        };
+        if (inputs.em_id !== undefined) {
+            workflowInputs.em_id = inputs.em_id.toString();
+        }
+        if (inputs.worker_id !== undefined) {
+            workflowInputs.worker_id = inputs.worker_id.toString();
+        }
+        if (inputs.retry_count !== undefined) {
+            workflowInputs.retry_count = inputs.retry_count.toString();
+        }
+        try {
+            await this.github.dispatchWorkflow('orchestrator.yml', 'main', // Always dispatch from main branch
+            workflowInputs, {
+                maxRetries: 3,
+                retryDelayMs: 1000,
+                idempotencyToken
+            });
+            await debugLog('event_dispatched', {
+                eventType,
+                issueNumber: inputs.issue_number,
+                emId: inputs.em_id,
+                workerId: inputs.worker_id,
+                idempotencyToken
+            });
+        }
+        catch (error) {
+            const errorMsg = `Failed to dispatch ${eventType}: ${error.message}`;
+            console.error(errorMsg);
+            this.addErrorToHistory(errorMsg, `dispatch-${eventType}`);
+            throw error;
+        }
+    }
+    /**
      * Add error to history (preserves all errors)
      */
     addErrorToHistory(message, context) {
@@ -319,6 +371,27 @@ ${emTable}${finalPRSection}${errorSection}
                     await debugLog('dispatch_schedule');
                     await this.handleProgressCheck(event);
                     break;
+                // New internal dispatch events
+                case 'start_em':
+                    await debugLog('dispatch_start_em', { emId: event.emId });
+                    await this.handleStartEM(event);
+                    break;
+                case 'execute_worker':
+                    await debugLog('dispatch_execute_worker', { emId: event.emId, workerId: event.workerId });
+                    await this.handleExecuteWorker(event);
+                    break;
+                case 'create_em_pr':
+                    await debugLog('dispatch_create_em_pr', { emId: event.emId });
+                    await this.handleCreateEMPR(event);
+                    break;
+                case 'check_completion':
+                    await debugLog('dispatch_check_completion');
+                    await this.handleCheckCompletion(event);
+                    break;
+                case 'retry_failed':
+                    await debugLog('dispatch_retry_failed', { emId: event.emId, workerId: event.workerId });
+                    await this.handleRetryFailed(event);
+                    break;
                 default:
                     await debugLog('dispatch_unhandled', { type: event.type });
                     console.log(`Unhandled event type: ${event.type}`);
@@ -346,17 +419,32 @@ ${emTable}${finalPRSection}${errorSection}
     /**
      * Handle issue labeled - start new orchestration
      */
+    /**
+     * Handle issue labeled - analyze and dispatch EMs
+     * This handler ONLY analyzes and dispatches - it does NOT execute workers
+     */
     async handleIssueLabeled(event) {
         if (!event.issueNumber) {
             throw new Error('Issue number required for issue_labeled event');
         }
         // Ensure all orchestrator labels exist in the repo
         await this.github.ensureLabelsExist();
-        // Check if orchestration already in progress
+        // Check if orchestration already in progress (idempotency check)
         const existingBranch = await findWorkBranchForIssue(event.issueNumber);
         if (existingBranch) {
             console.log(`Orchestration already in progress on branch: ${existingBranch}`);
-            await this.handleProgressCheck({ ...event, branch: existingBranch });
+            // Load state and check if we need to dispatch any pending EMs
+            this.state = await this.loadStateFromWorkBranch(existingBranch);
+            if (this.state) {
+                // Dispatch any pending EMs that haven't been started
+                const pendingEMs = this.state.ems.filter(em => em.status === 'pending');
+                for (const em of pendingEMs) {
+                    await this.dispatchEvent('start_em', {
+                        issue_number: event.issueNumber,
+                        em_id: em.id
+                    });
+                }
+            }
             return;
         }
         // Get issue details
@@ -374,8 +462,8 @@ ${emTable}${finalPRSection}${errorSection}
         });
         // Create work branch and save initial state
         await initializeState(this.state, workBranch);
-        // Move to analysis phase
-        await this.runAnalysis();
+        // Run analysis ONLY - this will plan EMs and dispatch them
+        await this.runAnalysisAndDispatch();
     }
     /**
      * Handle issue closed - cleanup all branches and PRs
@@ -449,7 +537,455 @@ ${emTable}${finalPRSection}${errorSection}
         console.log(`\nCleanup complete for issue #${event.issueNumber}`);
     }
     /**
+     * Handle start_em event - create EM branch and dispatch workers
+     */
+    async handleStartEM(event) {
+        if (!event.issueNumber || event.emId === undefined) {
+            throw new Error('Issue number and EM ID required for start_em event');
+        }
+        // Load state
+        const workBranch = await findWorkBranchForIssue(event.issueNumber);
+        if (!workBranch) {
+            throw new Error(`No work branch found for issue #${event.issueNumber}`);
+        }
+        this.state = await this.loadStateFromWorkBranch(workBranch);
+        if (!this.state) {
+            throw new Error(`Failed to load state for issue #${event.issueNumber}`);
+        }
+        // Find EM
+        const em = this.state.ems.find(e => e.id === event.emId);
+        if (!em) {
+            throw new Error(`EM-${event.emId} not found in state`);
+        }
+        // Idempotency check: if EM already started, skip
+        if (em.status !== 'pending') {
+            console.log(`EM-${em.id} already started (status: ${em.status}), skipping`);
+            return;
+        }
+        console.log(`\n=== Starting EM-${em.id}: ${em.focusArea} ===`);
+        try {
+            // Create EM branch from work branch
+            await this.github.createBranch(em.branch, this.state.workBranch);
+            console.log(`  Created branch ${em.branch}`);
+            // Break down into worker tasks using Claude
+            const workerTasks = await this.breakdownEMTask(em);
+            // Create worker states
+            em.workers = workerTasks.map(wt => ({
+                id: wt.worker_id,
+                task: wt.task,
+                files: wt.files,
+                branch: `${em.branch}-w-${wt.worker_id}`,
+                status: 'pending',
+                reviewsAddressed: 0
+            }));
+            em.status = 'workers_running';
+            em.startedAt = new Date().toISOString();
+            await saveState(this.state, `chore: EM-${em.id} assigned ${workerTasks.length} workers`);
+            await this.updateProgressComment();
+            // Dispatch execute_worker for EACH worker
+            console.log(`  Dispatching ${em.workers.length} workers for EM-${em.id}`);
+            for (const worker of em.workers) {
+                await this.dispatchEvent('execute_worker', {
+                    issue_number: event.issueNumber,
+                    em_id: em.id,
+                    worker_id: worker.id
+                });
+            }
+            console.log(`EM-${em.id} started - workers dispatched. Handler exiting.`);
+        }
+        catch (error) {
+            console.error(`EM-${em.id} failed to start: ${error.message}`);
+            em.status = 'failed';
+            em.error = error.message;
+            this.addErrorToHistory(`EM-${em.id} failed to start: ${error.message}`, undefined);
+            await saveState(this.state);
+            throw error;
+        }
+    }
+    /**
+     * Handle execute_worker event - execute worker task and create PR
+     */
+    async handleExecuteWorker(event) {
+        if (!event.issueNumber || event.emId === undefined || event.workerId === undefined) {
+            throw new Error('Issue number, EM ID, and Worker ID required for execute_worker event');
+        }
+        // Load state
+        const workBranch = await findWorkBranchForIssue(event.issueNumber);
+        if (!workBranch) {
+            throw new Error(`No work branch found for issue #${event.issueNumber}`);
+        }
+        this.state = await this.loadStateFromWorkBranch(workBranch);
+        if (!this.state) {
+            throw new Error(`Failed to load state for issue #${event.issueNumber}`);
+        }
+        // Find EM and worker
+        const em = this.state.ems.find(e => e.id === event.emId);
+        if (!em) {
+            throw new Error(`EM-${event.emId} not found in state`);
+        }
+        const worker = em.workers.find(w => w.id === event.workerId);
+        if (!worker) {
+            throw new Error(`Worker-${event.workerId} not found in EM-${em.id}`);
+        }
+        // Idempotency check: if worker already has PR, skip
+        if (worker.prNumber) {
+            console.log(`Worker-${worker.id} already has PR #${worker.prNumber}, skipping`);
+            return;
+        }
+        console.log(`\n--- Executing Worker-${worker.id}: ${worker.task.substring(0, 50)}... ---`);
+        try {
+            // Create worker branch from EM branch using GitHub API
+            await this.github.createBranch(worker.branch, em.branch);
+            worker.status = 'in_progress';
+            worker.startedAt = new Date().toISOString();
+            await saveState(this.state);
+            // Execute worker task using SDK
+            const prompt = this.buildWorkerPrompt(worker);
+            const result = await this.sdkRunner.executeTask(prompt);
+            if (!result.success) {
+                worker.status = 'failed';
+                worker.error = result.error;
+                this.addErrorToHistory(`Worker-${worker.id} SDK execution failed: ${result.error}`, `EM-${em.id}`);
+                await saveState(this.state);
+                await this.updateProgressComment();
+                return;
+            }
+            // Create PR
+            const prTitle = `[EM-${em.id}/W-${worker.id}] ${worker.task.substring(0, 60)}`;
+            const prBody = `## Task\n${worker.task}\n\n## Files Changed\n${worker.files.map(f => `- ${f}`).join('\n')}\n\n---\n*Automated by Claude Code Orchestrator*`;
+            const pr = await this.github.createPullRequest({
+                title: prTitle,
+                body: prBody,
+                head: worker.branch,
+                base: em.branch
+            });
+            worker.status = 'pr_created';
+            worker.prNumber = pr.number;
+            worker.prUrl = pr.html_url;
+            worker.completedAt = new Date().toISOString();
+            // Set PR labels
+            await this.github.setPRLabels(pr.number, 'cco-type-worker', 'cco-status-awaiting-review', em.id);
+            await saveState(this.state, `chore: Worker-${worker.id} created PR #${pr.number}`);
+            await this.updateProgressComment();
+            console.log(`Worker-${worker.id} completed - PR #${pr.number} created. Handler exiting.`);
+        }
+        catch (error) {
+            console.error(`Worker-${worker.id} failed: ${error.message}`);
+            worker.status = 'failed';
+            worker.error = error.message;
+            this.addErrorToHistory(`Worker-${worker.id} execution failed: ${error.message}`, `EM-${em.id}`);
+            await saveState(this.state);
+            await this.updateProgressComment();
+            throw error;
+        }
+    }
+    /**
+     * Handle create_em_pr event - create PR after all workers merged
+     */
+    async handleCreateEMPR(event) {
+        if (!event.issueNumber || event.emId === undefined) {
+            throw new Error('Issue number and EM ID required for create_em_pr event');
+        }
+        // Load state
+        const workBranch = await findWorkBranchForIssue(event.issueNumber);
+        if (!workBranch) {
+            throw new Error(`No work branch found for issue #${event.issueNumber}`);
+        }
+        this.state = await this.loadStateFromWorkBranch(workBranch);
+        if (!this.state) {
+            throw new Error(`Failed to load state for issue #${event.issueNumber}`);
+        }
+        const em = this.state.ems.find(e => e.id === event.emId);
+        if (!em) {
+            throw new Error(`EM-${event.emId} not found in state`);
+        }
+        // Idempotency check
+        if (em.prNumber) {
+            console.log(`EM-${em.id} already has PR #${em.prNumber}, skipping`);
+            return;
+        }
+        // Check if all workers are merged
+        const allWorkersMerged = em.workers.every(w => w.status === 'merged' || w.status === 'skipped');
+        if (!allWorkersMerged) {
+            console.log(`EM-${em.id} workers not all merged yet, skipping`);
+            return;
+        }
+        console.log(`\n=== Creating PR for EM-${em.id} ===`);
+        try {
+            // Create EM PR
+            const prTitle = `[EM-${em.id}] ${em.focusArea}: ${em.task.substring(0, 60)}`;
+            const prBody = `## ${em.focusArea}\n\n${em.task}\n\n## Workers\n${em.workers.map(w => `- W-${w.id}: ${w.status === 'merged' ? '✅' : '⏭️'} ${w.task.substring(0, 50)}`).join('\n')}\n\n---\n*Automated by Claude Code Orchestrator*`;
+            const pr = await this.github.createPullRequest({
+                title: prTitle,
+                body: prBody,
+                head: em.branch,
+                base: this.state.workBranch
+            });
+            em.status = 'pr_created';
+            em.prNumber = pr.number;
+            em.prUrl = pr.html_url;
+            await this.github.setPRLabels(pr.number, 'cco-type-em', 'cco-status-awaiting-review', em.id);
+            await saveState(this.state, `chore: EM-${em.id} created PR #${pr.number}`);
+            await this.updateProgressComment();
+            console.log(`EM-${em.id} PR #${pr.number} created. Handler exiting.`);
+        }
+        catch (error) {
+            console.error(`Failed to create EM-${em.id} PR: ${error.message}`);
+            em.status = 'failed';
+            em.error = error.message;
+            this.addErrorToHistory(`EM-${em.id} PR creation failed: ${error.message}`, undefined);
+            await saveState(this.state);
+            throw error;
+        }
+    }
+    /**
+     * Handle check_completion event - check if all EMs done and create final PR
+     */
+    async handleCheckCompletion(event) {
+        if (!event.issueNumber) {
+            throw new Error('Issue number required for check_completion event');
+        }
+        // Load state
+        const workBranch = await findWorkBranchForIssue(event.issueNumber);
+        if (!workBranch) {
+            throw new Error(`No work branch found for issue #${event.issueNumber}`);
+        }
+        this.state = await this.loadStateFromWorkBranch(workBranch);
+        if (!this.state) {
+            throw new Error(`Failed to load state for issue #${event.issueNumber}`);
+        }
+        // Check if all EMs are merged
+        const allEMsMerged = this.state.ems.every(em => em.status === 'merged' || em.status === 'skipped');
+        if (!allEMsMerged) {
+            console.log('Not all EMs merged yet, skipping final PR creation');
+            return;
+        }
+        // Check if final PR already exists
+        if (this.state.finalPr?.number) {
+            console.log(`Final PR #${this.state.finalPr.number} already exists, skipping`);
+            return;
+        }
+        console.log('\n=== All EMs merged - Creating final PR ===');
+        try {
+            await this.createFinalPR();
+        }
+        catch (error) {
+            console.error(`Failed to create final PR: ${error.message}`);
+            this.addErrorToHistory(`Final PR creation failed: ${error.message}`, undefined);
+            await saveState(this.state);
+            throw error;
+        }
+    }
+    /**
+     * Handle retry_failed event - retry a failed worker or EM
+     */
+    async handleRetryFailed(event) {
+        if (!event.issueNumber) {
+            throw new Error('Issue number required for retry_failed event');
+        }
+        // Load state
+        const workBranch = await findWorkBranchForIssue(event.issueNumber);
+        if (!workBranch) {
+            throw new Error(`No work branch found for issue #${event.issueNumber}`);
+        }
+        this.state = await this.loadStateFromWorkBranch(workBranch);
+        if (!this.state) {
+            throw new Error(`Failed to load state for issue #${event.issueNumber}`);
+        }
+        if (event.workerId !== undefined && event.emId !== undefined) {
+            // Retry worker
+            const em = this.state.ems.find(e => e.id === event.emId);
+            const worker = em?.workers.find(w => w.id === event.workerId);
+            if (worker && worker.status === 'failed') {
+                worker.status = 'pending';
+                worker.error = undefined;
+                await saveState(this.state);
+                await this.dispatchEvent('execute_worker', {
+                    issue_number: event.issueNumber,
+                    em_id: event.emId,
+                    worker_id: event.workerId,
+                    retry_count: (event.retryCount || 0) + 1
+                });
+            }
+        }
+        else if (event.emId !== undefined) {
+            // Retry EM
+            const em = this.state.ems.find(e => e.id === event.emId);
+            if (em && em.status === 'failed') {
+                em.status = 'pending';
+                em.error = undefined;
+                await saveState(this.state);
+                await this.dispatchEvent('start_em', {
+                    issue_number: event.issueNumber,
+                    em_id: event.emId,
+                    retry_count: (event.retryCount || 0) + 1
+                });
+            }
+        }
+    }
+    /**
      * Run director analysis to break down issue into EM tasks
+     */
+    /**
+     * Run analysis and dispatch EMs (event-driven version)
+     * This ONLY analyzes and dispatches - does NOT execute workers
+     */
+    async runAnalysisAndDispatch() {
+        if (!this.state)
+            throw new Error('No state');
+        console.log('\n=== Phase: Director Analysis ===');
+        await this.setPhase('analyzing');
+        await saveState(this.state);
+        await this.updateProgressComment();
+        const { maxEms, maxWorkersPerEm } = this.state.config;
+        const prompt = `You are a technical director analyzing a GitHub issue to break it down into tasks.
+
+**Issue #${this.state.issue.number}: ${this.state.issue.title}**
+
+${this.state.issue.body}
+
+**Understanding the Issue:**
+- This issue may contain test failures in various formats (Rust cargo, Jest, pytest, etc.)
+- Test names with timestamps like \`2026-01-20T13:03:40.5487877Z\` are Rust cargo test output
+- Look for patterns: failures sections, test names, module paths (e.g., \`solver::evaluate::tests::test_name\`)
+- If multiple test suites are failing (e.g., "Solver", "Binder", "Checker"), group related failures
+- Extract the core problem from the test failures - what actually needs to be fixed?
+
+**For Test Failure Issues:**
+- Group failing tests by the module/component they belong to
+- One EM per major component (e.g., "Solver tests", "Binder tests", "Checker tests")
+- Each EM should fix tests for their assigned module
+- Focus on the root cause - multiple tests may fail for the same reason
+- Estimated workers should be proportional to: (number of failing tests in group) / 10
+
+**Your task:**
+1. First, determine if this project needs initial setup (gitignore, package.json, tsconfig, etc.)
+2. Break this issue down into EM (Engineering Manager) tasks. Each EM focuses on a distinct area.
+3. Provide a brief summary for the PR description.
+
+**CRITICAL: FILE OWNERSHIP (most important rule):**
+- **EACH EM MUST OWN COMPLETELY SEPARATE FILES/DIRECTORIES**
+- NO two EMs can create or modify the same file - this causes merge conflicts!
+- Assign EXPLICIT directory ownership to each EM:
+  - EM-1: "owns src/models/, src/lib/storage.ts"
+  - EM-2: "owns src/components/, src/pages/"
+  - EM-3: "owns src/api/, src/middleware/"
+- Files that multiple EMs need (like types) should be created by the FIRST EM and only IMPORTED by others
+- Include "files_owned" array in each EM's output to make ownership clear
+
+**Important Guidelines:**
+- If this is a new project, include a "Project Setup" EM (id: 0) that runs FIRST
+- Project Setup EM should create ALL setup files: .gitignore, package.json, tsconfig.json, AND shared types
+- NO other EM should create setup files - they assume setup is done
+- Other EMs IMPORT from setup-created files, never modify them
+
+**Team Sizing - USE ALL AVAILABLE CAPACITY for complex tasks:**
+- You have up to ${maxEms} EMs available (not counting setup)
+- Each EM can have up to ${maxWorkersPerEm} Workers
+- For SIMPLE tasks (1-2 features): Use 1-2 EMs with 1-2 workers each
+- For MEDIUM tasks (3-5 features): Use 2-3 EMs with 2-3 workers each  
+- For COMPLEX tasks (many features, multiple layers): USE ALL ${maxEms} EMs with ${maxWorkersPerEm} workers each
+- More workers = faster completion but ensure non-overlapping work
+- When in doubt, USE MORE workers - parallelization speeds up delivery
+
+**Output ONLY a JSON object (no other text):**
+{
+  "needs_setup": true,
+  "summary": "Brief summary of the implementation plan for PR description",
+  "ems": [
+    {
+      "em_id": 0,
+      "task": "Set up project foundation with .gitignore, package.json, tsconfig.json, and shared types",
+      "focus_area": "Project Setup",
+      "files_owned": [".gitignore", "package.json", "tsconfig.json", "src/types.ts"],
+      "estimated_workers": 1,
+      "must_complete_first": true
+    },
+    {
+      "em_id": 1,
+      "task": "Description of what this EM should accomplish",
+      "focus_area": "e.g., Core Logic, UI, Testing",
+      "files_owned": ["src/models/", "src/lib/"],
+      "estimated_workers": 2,
+      "must_complete_first": false
+    }
+  ]
+}`;
+        const sessionId = generateSessionId('director', this.state.issue.number);
+        const result = await this.claude.runTask(prompt, sessionId);
+        if (!result.success) {
+            throw new Error(`Director analysis failed: ${result.stderr}`);
+        }
+        const analysis = extractJson(result.stdout);
+        if (!analysis.ems || !Array.isArray(analysis.ems) || analysis.ems.length === 0) {
+            throw new Error('Director returned no EM tasks');
+        }
+        // Store summary for PR description
+        this.state.analysisSummary = analysis.summary;
+        // Check if we need project setup first
+        const setupEM = analysis.ems.find(em => em.must_complete_first || em.focus_area === 'Project Setup');
+        const otherEMs = analysis.ems.filter(em => !em.must_complete_first && em.focus_area !== 'Project Setup');
+        if (setupEM) {
+            // Run setup phase first
+            this.state.projectSetup = { completed: false };
+            await this.setPhase('project_setup');
+            // Create setup EM state
+            this.state.ems = [{
+                    id: 0,
+                    task: setupEM.task,
+                    focusArea: 'Project Setup',
+                    branch: `cco/issue-${this.state.issue.number}-setup`,
+                    status: 'pending',
+                    workers: [],
+                    reviewsAddressed: 0
+                }];
+            // Store other EMs in state for later (after setup completes)
+            this.state.pendingEMs = otherEMs.slice(0, maxEms).map((em, idx) => ({
+                id: idx + 1,
+                task: em.task,
+                focusArea: em.focus_area,
+                branch: `cco/issue-${this.state.issue.number}-em-${idx + 1}`,
+                status: 'pending',
+                workers: [],
+                reviewsAddressed: 0
+            }));
+            console.log(`Project setup needed. ${this.state.pendingEMs.length} EMs queued after setup.`);
+            await saveState(this.state, `chore: director planned project setup and ${this.state.pendingEMs.length} EMs`);
+            await this.updateProgressComment();
+            // Dispatch setup EM
+            await this.dispatchEvent('start_em', {
+                issue_number: this.state.issue.number,
+                em_id: 0
+            });
+        }
+        else {
+            // No setup needed, proceed normally
+            this.state.ems = otherEMs.slice(0, maxEms).map((em, idx) => ({
+                id: idx + 1,
+                task: em.task,
+                focusArea: em.focus_area,
+                branch: `cco/issue-${this.state.issue.number}-em-${idx + 1}`,
+                status: 'pending',
+                workers: [],
+                reviewsAddressed: 0
+            }));
+            await this.setPhase('em_assignment');
+            await saveState(this.state, `chore: director assigned ${this.state.ems.length} EMs`);
+            await this.updateProgressComment();
+            // Dispatch ALL EMs in parallel
+            console.log(`\n=== Dispatching ${this.state.ems.length} EMs ===`);
+            for (const em of this.state.ems) {
+                await this.dispatchEvent('start_em', {
+                    issue_number: this.state.issue.number,
+                    em_id: em.id
+                });
+            }
+        }
+        console.log('Analysis complete - EMs dispatched. Handler exiting.');
+    }
+    /**
+     * Legacy runAnalysis - kept for backward compatibility during migration
+     * @deprecated Use runAnalysisAndDispatch instead
      */
     async runAnalysis() {
         if (!this.state)
@@ -1371,12 +1907,14 @@ Closes #${this.state.issue.number}
             return;
         }
         // Update state based on which PR was merged
+        let mergedEM = null;
         for (const em of this.state.ems) {
             // Check if it's a worker PR
             for (const worker of em.workers) {
                 if (worker.prNumber === event.prNumber) {
                     worker.status = 'merged';
                     console.log(`Worker-${worker.id} PR merged`);
+                    mergedEM = em; // Track which EM this worker belongs to
                 }
             }
             // Check if it's an EM PR
@@ -1386,8 +1924,28 @@ Closes #${this.state.issue.number}
             }
         }
         await saveState(this.state);
-        // Check if we should proceed
-        await this.handleProgressCheck(event);
+        // Event-driven: Dispatch next steps instead of continuing inline
+        if (mergedEM) {
+            // Check if all workers for this EM are merged
+            const allWorkersMerged = mergedEM.workers.every(w => w.status === 'merged' || w.status === 'skipped');
+            if (allWorkersMerged && !mergedEM.prNumber) {
+                // Dispatch create_em_pr
+                console.log(`All workers merged for EM-${mergedEM.id}, dispatching create_em_pr`);
+                await this.dispatchEvent('create_em_pr', {
+                    issue_number: this.state.issue.number,
+                    em_id: mergedEM.id
+                });
+            }
+        }
+        // Check if all EMs are merged - dispatch check_completion
+        const allEMsMerged = this.state.ems.every(em => em.status === 'merged' || em.status === 'skipped');
+        if (allEMsMerged && !this.state.finalPr?.number) {
+            console.log('All EMs merged, dispatching check_completion');
+            await this.dispatchEvent('check_completion', {
+                issue_number: this.state.issue.number
+            });
+        }
+        await this.updateProgressComment();
     }
     /**
      * Handle PR review event

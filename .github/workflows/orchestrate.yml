@@ -1,6 +1,78 @@
 name: Claude Code Orchestrator
 
 on:
+  workflow_dispatch:
+    inputs:
+      event_type:
+        description: 'Event type that triggered this workflow'
+        required: true
+        type: string
+      issue_number:
+        description: 'Issue number (for issue_labeled events)'
+        required: false
+        type: string
+      pr_number:
+        description: 'PR number (for PR events)'
+        required: false
+        type: string
+      branch:
+        description: 'Branch name (for push/PR events)'
+        required: false
+        type: string
+      review_state:
+        description: 'Review state (approved, changes_requested, commented)'
+        required: false
+        type: string
+      review_body:
+        description: 'Review body text'
+        required: false
+        type: string
+      max_ems:
+        description: 'Maximum number of Engineering Managers'
+        required: false
+        type: string
+        default: '10'
+      max_workers_per_em:
+        description: 'Maximum Workers per EM'
+        required: false
+        type: string
+        default: '3'
+      review_wait_minutes:
+        description: 'Minutes to wait for human code review (not used in event-driven mode)'
+        required: false
+        type: string
+        default: '5'
+      trigger_label:
+        description: 'Label that triggers orchestration on issues'
+        required: false
+        type: string
+        default: 'cco'
+      pr_label:
+        description: 'Label to add to all PRs created by orchestrator'
+        required: false
+        type: string
+        default: 'cco'
+      debug:
+        description: 'Enable debug logging to a separate issue'
+        required: false
+        type: string
+        default: 'false'
+      em_id:
+        description: 'EM ID (for start_em, execute_worker, create_em_pr events)'
+        required: false
+        type: string
+      worker_id:
+        description: 'Worker ID (for execute_worker event)'
+        required: false
+        type: string
+      retry_count:
+        description: 'Retry attempt number (for retry_failed event)'
+        required: false
+        type: string
+      idempotency_token:
+        description: 'Idempotency token to prevent duplicate processing'
+        required: false
+        type: string
   workflow_call:
     inputs:
       event_type:
@@ -57,6 +129,22 @@ on:
         required: false
         type: string
         default: 'false'
+      em_id:
+        description: 'EM ID (for start_em, execute_worker, create_em_pr events)'
+        required: false
+        type: string
+      worker_id:
+        description: 'Worker ID (for execute_worker event)'
+        required: false
+        type: string
+      retry_count:
+        description: 'Retry attempt number (for retry_failed event)'
+        required: false
+        type: string
+      idempotency_token:
+        description: 'Idempotency token to prevent duplicate processing'
+        required: false
+        type: string
     secrets:
       CLAUDE_CONFIGS:
         description: 'JSON array of Claude API configurations'
@@ -69,6 +157,11 @@ jobs:
   orchestrate:
     name: Handle Event
     runs-on: ubuntu-latest
+    concurrency:
+      # Prevent multiple handlers for same issue/EM/worker from running simultaneously
+      # But allow different issues/EMs/workers to run in parallel
+      group: cco-${{ inputs.issue_number || 'none' }}-${{ inputs.em_id || 'main' }}-${{ inputs.worker_id || 'main' }}
+      cancel-in-progress: false
     steps:
       - name: Checkout orchestrator
         uses: actions/checkout@v4
@@ -117,6 +210,10 @@ jobs:
           REVIEW_WAIT_MINUTES: ${{ inputs.review_wait_minutes }}
           PR_LABEL: ${{ inputs.pr_label }}
           CCO_DEBUG: ${{ inputs.debug }}
+          EM_ID: ${{ inputs.em_id }}
+          WORKER_ID: ${{ inputs.worker_id }}
+          RETRY_COUNT: ${{ inputs.retry_count }}
+          IDEMPOTENCY_TOKEN: ${{ inputs.idempotency_token }}
         run: |
           export REPO_OWNER="${GITHUB_REPOSITORY%/*}"
           export REPO_NAME="${GITHUB_REPOSITORY#*/}"

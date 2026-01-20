@@ -28,25 +28,53 @@ export class GitHubClient {
         return { owner: this.owner, repo: this.repo };
     }
     /**
-     * Dispatch a workflow
+     * Dispatch a workflow with retry logic and idempotency
      * @param workflowId - Workflow filename or ID
      * @param ref - Git ref to run against
      * @param inputs - Workflow inputs
+     * @param options - Optional retry and idempotency options
      * @returns void
      */
-    async dispatchWorkflow(workflowId, ref, inputs) {
-        try {
-            await this.octokit.rest.actions.createWorkflowDispatch({
-                owner: this.owner,
-                repo: this.repo,
-                workflow_id: workflowId,
-                ref,
-                inputs: inputs
-            });
+    async dispatchWorkflow(workflowId, ref, inputs, options) {
+        const maxRetries = options?.maxRetries ?? 3;
+        const baseDelayMs = options?.retryDelayMs ?? 1000;
+        // Add idempotency token to inputs if provided
+        const finalInputs = { ...inputs };
+        if (options?.idempotencyToken) {
+            finalInputs.idempotency_token = options.idempotencyToken;
         }
-        catch (error) {
-            throw new Error(`Failed to dispatch workflow ${workflowId}: ${error.message}`);
+        let lastError = null;
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+                await this.octokit.rest.actions.createWorkflowDispatch({
+                    owner: this.owner,
+                    repo: this.repo,
+                    workflow_id: workflowId,
+                    ref,
+                    inputs: finalInputs
+                });
+                return; // Success
+            }
+            catch (error) {
+                lastError = error;
+                const errorMessage = lastError.message.toLowerCase();
+                // Don't retry on 4xx errors (bad request, not found, etc.)
+                if (errorMessage.includes('400') ||
+                    errorMessage.includes('404') ||
+                    errorMessage.includes('422')) {
+                    throw new Error(`Failed to dispatch workflow ${workflowId}: ${lastError.message}`);
+                }
+                // Retry on rate limits or transient errors
+                if (attempt < maxRetries - 1) {
+                    // Exponential backoff with jitter
+                    const jitter = Math.random() * 0.3; // 0-30% jitter
+                    const delay = baseDelayMs * Math.pow(2, attempt) * (1 + jitter);
+                    console.log(`Dispatch attempt ${attempt + 1} failed, retrying in ${Math.round(delay)}ms: ${lastError.message}`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
         }
+        throw new Error(`Failed to dispatch workflow ${workflowId} after ${maxRetries} attempts: ${lastError?.message}`);
     }
     /**
      * Create a Git branch

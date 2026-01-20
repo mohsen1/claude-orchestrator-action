@@ -9,7 +9,7 @@
  * 4. Updates state and exits
  */
 import type { ClaudeConfig } from '../shared/config.js';
-export type EventType = 'issue_labeled' | 'issue_closed' | 'push' | 'pull_request_opened' | 'pull_request_merged' | 'pull_request_review' | 'workflow_dispatch' | 'schedule';
+export type EventType = 'issue_labeled' | 'issue_closed' | 'push' | 'pull_request_opened' | 'pull_request_merged' | 'pull_request_review' | 'workflow_dispatch' | 'schedule' | 'start_em' | 'execute_worker' | 'create_em_pr' | 'check_completion' | 'retry_failed';
 export interface OrchestratorEvent {
     type: EventType;
     issueNumber?: number;
@@ -17,6 +17,10 @@ export interface OrchestratorEvent {
     branch?: string;
     reviewState?: 'approved' | 'changes_requested' | 'commented';
     reviewBody?: string;
+    emId?: number;
+    workerId?: number;
+    retryCount?: number;
+    idempotencyToken?: string;
 }
 export interface OrchestratorContext {
     repo: {
@@ -40,6 +44,11 @@ export declare class EventDrivenOrchestrator {
     private sdkRunner;
     private state;
     constructor(ctx: OrchestratorContext);
+    /**
+     * Dispatch an internal event via workflow_dispatch
+     * Generates idempotency token and handles retries
+     */
+    private dispatchEvent;
     /**
      * Add error to history (preserves all errors)
      */
@@ -67,13 +76,46 @@ export declare class EventDrivenOrchestrator {
     /**
      * Handle issue labeled - start new orchestration
      */
+    /**
+     * Handle issue labeled - analyze and dispatch EMs
+     * This handler ONLY analyzes and dispatches - it does NOT execute workers
+     */
     private handleIssueLabeled;
     /**
      * Handle issue closed - cleanup all branches and PRs
      */
     private handleIssueClosed;
     /**
+     * Handle start_em event - create EM branch and dispatch workers
+     */
+    private handleStartEM;
+    /**
+     * Handle execute_worker event - execute worker task and create PR
+     */
+    private handleExecuteWorker;
+    /**
+     * Handle create_em_pr event - create PR after all workers merged
+     */
+    private handleCreateEMPR;
+    /**
+     * Handle check_completion event - check if all EMs done and create final PR
+     */
+    private handleCheckCompletion;
+    /**
+     * Handle retry_failed event - retry a failed worker or EM
+     */
+    private handleRetryFailed;
+    /**
      * Run director analysis to break down issue into EM tasks
+     */
+    /**
+     * Run analysis and dispatch EMs (event-driven version)
+     * This ONLY analyzes and dispatches - does NOT execute workers
+     */
+    private runAnalysisAndDispatch;
+    /**
+     * Legacy runAnalysis - kept for backward compatibility during migration
+     * @deprecated Use runAnalysisAndDispatch instead
      */
     private runAnalysis;
     /**

@@ -32,6 +32,11 @@ async function main() {
     const branch = process.env.BRANCH || undefined;
     const reviewState = process.env.REVIEW_STATE;
     const reviewBody = process.env.REVIEW_BODY || undefined;
+    // New internal dispatch event parameters
+    const emId = process.env.EM_ID ? parseInt(process.env.EM_ID, 10) : undefined;
+    const workerId = process.env.WORKER_ID ? parseInt(process.env.WORKER_ID, 10) : undefined;
+    const retryCount = process.env.RETRY_COUNT ? parseInt(process.env.RETRY_COUNT, 10) : undefined;
+    const idempotencyToken = process.env.IDEMPOTENCY_TOKEN || undefined;
     // Check debug mode
     const debugEnabled = process.env.CCO_DEBUG === 'true';
     // Initialize debug logger early
@@ -89,7 +94,11 @@ async function main() {
         prNumber,
         branch,
         reviewState,
-        reviewBody
+        reviewBody,
+        emId,
+        workerId,
+        retryCount,
+        idempotencyToken
     };
     // Handle event
     try {
