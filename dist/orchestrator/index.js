@@ -639,6 +639,9 @@ ${emTable}${finalPRSection}${errorSection}
             worker.status = 'in_progress';
             worker.startedAt = new Date().toISOString();
             await saveState(this.state);
+            // Checkout worker branch for SDK execution
+            await GitOperations.checkout(worker.branch);
+            await GitOperations.pull(worker.branch);
             // Execute worker task using SDK
             const prompt = this.buildWorkerPrompt(worker);
             const result = await this.sdkRunner.executeTask(prompt);
@@ -649,6 +652,15 @@ ${emTable}${finalPRSection}${errorSection}
                 await saveState(this.state);
                 await this.updateProgressComment();
                 return;
+            }
+            // Commit and push changes made by SDK
+            const hasChanges = await GitOperations.hasUncommittedChanges();
+            if (hasChanges) {
+                await GitOperations.commitAndPush(`feat(worker-${worker.id}): ${worker.task.substring(0, 50)}`, worker.branch);
+                console.log(`  Committed and pushed changes for Worker-${worker.id}`);
+            }
+            else {
+                console.log(`  No changes to commit for Worker-${worker.id}`);
             }
             // Create PR
             const prTitle = `[EM-${em.id}/W-${worker.id}] ${worker.task.substring(0, 60)}`;
@@ -670,13 +682,25 @@ ${emTable}${finalPRSection}${errorSection}
             console.log(`Worker-${worker.id} completed - PR #${pr.number} created. Handler exiting.`);
         }
         catch (error) {
-            console.error(`Worker-${worker.id} failed: ${error.message}`);
-            worker.status = 'failed';
-            worker.error = error.message;
-            this.addErrorToHistory(`Worker-${worker.id} execution failed: ${error.message}`, `EM-${em.id}`);
+            const errorMsg = error.message;
+            // Handle "no commits between" error - worker produced no unique changes
+            if (errorMsg.includes('No commits between') || errorMsg.includes('Validation Failed')) {
+                console.log(`Worker-${worker.id} skipped: no unique commits`);
+                worker.status = 'skipped';
+                worker.error = 'No unique commits - worker output already in base branch';
+            }
+            else {
+                console.error(`Worker-${worker.id} failed: ${errorMsg}`);
+                worker.status = 'failed';
+                worker.error = errorMsg;
+                this.addErrorToHistory(`Worker-${worker.id} execution failed: ${errorMsg}`, `EM-${em.id}`);
+            }
             await saveState(this.state);
             await this.updateProgressComment();
-            throw error;
+            // Don't throw for skipped workers - let orchestration continue
+            if (worker.status === 'failed') {
+                throw error;
+            }
         }
     }
     /**
