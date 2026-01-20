@@ -75,8 +75,51 @@ export const GitOperations = {
    * @param branchName - Name of the branch to checkout
    * @returns void
    */
+  /**
+   * Clean up git state (abort rebases, merges, reset index)
+   */
+  async cleanupGitState(): Promise<void> {
+    // Abort any rebase in progress
+    try {
+      await execa('git', ['rebase', '--abort']);
+    } catch {
+      // No rebase in progress
+    }
+    
+    // Abort any merge in progress
+    try {
+      await execa('git', ['merge', '--abort']);
+    } catch {
+      // No merge in progress
+    }
+    
+    // Reset the index to HEAD (clears staging area)
+    try {
+      await execa('git', ['reset', 'HEAD']);
+    } catch {
+      // Might fail if no commits
+    }
+    
+    // Discard all local changes
+    try {
+      await execa('git', ['checkout', '--', '.']);
+    } catch {
+      // Might fail if nothing to discard
+    }
+    
+    // Clean untracked files
+    try {
+      await execa('git', ['clean', '-fd']);
+    } catch {
+      // Might fail
+    }
+  },
+
   async checkout(branchName: string): Promise<void> {
     try {
+      // Clean up any broken git state first (conflicts, merges, rebases)
+      await this.cleanupGitState();
+      
       // Discard changes to state file before checkout to avoid conflicts
       // State is always saved explicitly on the work branch
       try {
@@ -429,16 +472,38 @@ export const GitOperations = {
     try {
       try {
         await execa('git', ['push', '-u', 'origin', target]);
-      } catch {
+      } catch (firstError) {
         // If normal push fails, try pull-rebase then push (avoid force-push which can close PRs)
-        console.log('Normal push failed, pulling and retrying...');
+        console.log(`Normal push failed: ${(firstError as Error).message.substring(0, 100)}. Trying pull-rebase...`);
+        
+        // Clean up any broken state first
+        await this.cleanupGitState();
+        
         try {
+          await execa('git', ['fetch', 'origin', target]);
           await execa('git', ['pull', '--rebase', 'origin', target]);
           await execa('git', ['push', '-u', 'origin', target]);
-        } catch {
-          // If pull-rebase fails (e.g., branch doesn't exist remotely), just push
-          console.log('Pull-rebase failed, trying direct push...');
-          await execa('git', ['push', '-u', 'origin', target]);
+        } catch (rebaseError) {
+          // If pull-rebase fails, abort and try hard reset to remote then push
+          console.log(`Pull-rebase failed: ${(rebaseError as Error).message.substring(0, 100)}`);
+          
+          // Abort any stuck rebase
+          try {
+            await execa('git', ['rebase', '--abort']);
+          } catch {
+            // No rebase in progress
+          }
+          
+          // If branch doesn't exist remotely, just push
+          try {
+            await execa('git', ['push', '-u', 'origin', target]);
+          } catch (finalError) {
+            // Final attempt: hard reset to remote and push
+            console.log('Final attempt: hard reset to current HEAD and push...');
+            const currentCommit = (await execa('git', ['rev-parse', 'HEAD'])).stdout.trim();
+            await execa('git', ['reset', '--hard', currentCommit]);
+            await execa('git', ['push', '-u', 'origin', target]);
+          }
         }
       }
     } catch (error) {

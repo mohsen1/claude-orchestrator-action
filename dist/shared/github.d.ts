@@ -2,6 +2,7 @@
  * GitHub API client wrapper
  * Provides methods for common GitHub operations used by the orchestrator
  */
+import { StatusLabel, TypeLabel, PhaseLabel } from './labels.js';
 export interface RepoContext {
     owner: string;
     repo: string;
@@ -164,9 +165,45 @@ export declare class GitHubClient {
      * Get the underlying octokit instance
      * @returns Octokit instance
      */
-    getOctokit(): import("@octokit/core").Octokit & import("@octokit/plugin-rest-endpoint-methods/dist-types/types").Api & {
+    getOctokit(): import("@octokit/core").Octokit & import("@octokit/plugin-rest-endpoint-methods/dist-types/types.js").Api & {
         paginate: import("@octokit/plugin-paginate-rest").PaginateInterface;
     };
+    /**
+     * Ensure all orchestrator labels exist in the repository
+     * Creates them if they don't exist
+     */
+    ensureLabelsExist(): Promise<void>;
+    /**
+     * Get all labels on an issue or PR
+     * @param issueNumber - Issue/PR number
+     * @returns Array of label names
+     */
+    getLabels(issueNumber: number): Promise<string[]>;
+    /**
+     * Set a status label on a PR, removing any existing status labels
+     * @param prNumber - PR number
+     * @param status - Status label to set
+     */
+    setStatusLabel(prNumber: number, status: StatusLabel): Promise<void>;
+    /**
+     * Set initial labels on a new PR (type + status + base)
+     * @param prNumber - PR number
+     * @param type - Type label
+     * @param status - Initial status label
+     * @param emId - Optional EM ID for worker PRs
+     */
+    setPRLabels(prNumber: number, type: TypeLabel, status: StatusLabel, emId?: number): Promise<void>;
+    /**
+     * Update the phase label on an issue
+     * @param issueNumber - Issue number
+     * @param phase - Phase label to set
+     */
+    setPhaseLabel(issueNumber: number, phase: PhaseLabel): Promise<void>;
+    /**
+     * Remove all orchestrator labels from an issue/PR
+     * @param issueNumber - Issue/PR number
+     */
+    removeOrchestratorLabels(issueNumber: number): Promise<void>;
     /**
      * Get reviews for a pull request
      * @param prNumber - PR number

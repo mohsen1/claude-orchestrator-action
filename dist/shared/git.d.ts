@@ -33,6 +33,10 @@ export declare const GitOperations: {
      * @param branchName - Name of the branch to checkout
      * @returns void
      */
+    /**
+     * Clean up git state (abort rebases, merges, reset index)
+     */
+    cleanupGitState(): Promise<void>;
     checkout(branchName: string): Promise<void>;
     /**
      * @deprecated Use checkout instead

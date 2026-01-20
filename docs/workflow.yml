@@ -61,6 +61,7 @@ jobs:
       issue_number: ${{ github.event.issue.number }}
       trigger_label: 'cco'
       pr_label: 'cco'
+      review_wait_minutes: '5'  # Wait for code reviews before merging PRs
     secrets:
       CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
       CCO_PAT: ${{ secrets.CCO_PAT }}

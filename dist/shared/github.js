@@ -3,6 +3,7 @@
  * Provides methods for common GitHub operations used by the orchestrator
  */
 import { getOctokit } from '@actions/github';
+import { getAllOrchestratorLabels, isOrchestratorLabel, LABEL_PREFIXES, BASE_LABEL } from './labels.js';
 /**
  * GitHub API client for orchestrator operations
  */
@@ -428,6 +429,141 @@ export class GitHubClient {
      */
     getOctokit() {
         return this.octokit;
+    }
+    /**
+     * Ensure all orchestrator labels exist in the repository
+     * Creates them if they don't exist
+     */
+    async ensureLabelsExist() {
+        const labels = getAllOrchestratorLabels();
+        for (const label of labels) {
+            try {
+                await this.octokit.rest.issues.getLabel({
+                    owner: this.owner,
+                    repo: this.repo,
+                    name: label.name
+                });
+            }
+            catch (error) {
+                if (error.status === 404) {
+                    try {
+                        await this.octokit.rest.issues.createLabel({
+                            owner: this.owner,
+                            repo: this.repo,
+                            name: label.name,
+                            color: label.color,
+                            description: label.description
+                        });
+                        console.log(`Created label: ${label.name}`);
+                    }
+                    catch (createError) {
+                        console.warn(`Failed to create label ${label.name}: ${createError.message}`);
+                    }
+                }
+            }
+        }
+    }
+    /**
+     * Get all labels on an issue or PR
+     * @param issueNumber - Issue/PR number
+     * @returns Array of label names
+     */
+    async getLabels(issueNumber) {
+        try {
+            const { data } = await this.octokit.rest.issues.listLabelsOnIssue({
+                owner: this.owner,
+                repo: this.repo,
+                issue_number: issueNumber
+            });
+            return data.map(l => l.name);
+        }
+        catch (error) {
+            console.warn(`Failed to get labels for #${issueNumber}: ${error.message}`);
+            return [];
+        }
+    }
+    /**
+     * Set a status label on a PR, removing any existing status labels
+     * @param prNumber - PR number
+     * @param status - Status label to set
+     */
+    async setStatusLabel(prNumber, status) {
+        try {
+            const currentLabels = await this.getLabels(prNumber);
+            // Remove existing status labels
+            const statusLabels = currentLabels.filter(l => l.startsWith(LABEL_PREFIXES.STATUS));
+            for (const label of statusLabels) {
+                if (label !== status) {
+                    await this.removeLabel(prNumber, label);
+                }
+            }
+            // Add new status label if not already present
+            if (!currentLabels.includes(status)) {
+                await this.addLabels(prNumber, [status]);
+            }
+        }
+        catch (error) {
+            console.warn(`Failed to set status label on PR #${prNumber}: ${error.message}`);
+        }
+    }
+    /**
+     * Set initial labels on a new PR (type + status + base)
+     * @param prNumber - PR number
+     * @param type - Type label
+     * @param status - Initial status label
+     * @param emId - Optional EM ID for worker PRs
+     */
+    async setPRLabels(prNumber, type, status, emId) {
+        try {
+            const labels = [BASE_LABEL, type, status];
+            if (emId !== undefined) {
+                labels.push(`${LABEL_PREFIXES.EM}${emId}`);
+            }
+            await this.addLabels(prNumber, labels);
+        }
+        catch (error) {
+            console.warn(`Failed to set PR labels on #${prNumber}: ${error.message}`);
+        }
+    }
+    /**
+     * Update the phase label on an issue
+     * @param issueNumber - Issue number
+     * @param phase - Phase label to set
+     */
+    async setPhaseLabel(issueNumber, phase) {
+        try {
+            const currentLabels = await this.getLabels(issueNumber);
+            // Remove existing phase labels
+            const phaseLabels = currentLabels.filter(l => l.startsWith(LABEL_PREFIXES.PHASE));
+            for (const label of phaseLabels) {
+                if (label !== phase) {
+                    await this.removeLabel(issueNumber, label);
+                }
+            }
+            // Add new phase label if not already present
+            if (!currentLabels.includes(phase)) {
+                await this.addLabels(issueNumber, [phase]);
+            }
+        }
+        catch (error) {
+            console.warn(`Failed to set phase label on issue #${issueNumber}: ${error.message}`);
+        }
+    }
+    /**
+     * Remove all orchestrator labels from an issue/PR
+     * @param issueNumber - Issue/PR number
+     */
+    async removeOrchestratorLabels(issueNumber) {
+        try {
+            const currentLabels = await this.getLabels(issueNumber);
+            const orchestratorLabels = currentLabels.filter(isOrchestratorLabel);
+            for (const label of orchestratorLabels) {
+                await this.removeLabel(issueNumber, label);
+            }
+        }
+        catch (error) {
+            console.warn(`Failed to remove orchestrator labels from #${issueNumber}: ${error.message}`);
+        }
     }
     /**
      * Get reviews for a pull request

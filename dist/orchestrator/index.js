@@ -18,6 +18,7 @@ import { extractJson } from '../shared/json.js';
 import { slugify, getDirectorBranch } from '../shared/branches.js';
 import { createInitialState, areAllWorkersComplete, hasSuccessfulWorkers, getNextPendingWorker, addErrorToHistory } from './state.js';
 import { loadState, saveState, initializeState, findWorkBranchForIssue } from './persistence.js';
+import { STATUS_LABELS, TYPE_LABELS, phaseToLabel } from '../shared/labels.js';
 export class EventDrivenOrchestrator {
     ctx;
     github;
@@ -58,6 +59,19 @@ export class EventDrivenOrchestrator {
             message: message.substring(0, 500),
             context
         });
+    }
+    /**
+     * Update the phase and sync the label on the issue
+     */
+    async setPhase(phase) {
+        if (!this.state)
+            return;
+        this.state.phase = phase;
+        // Update the phase label on the issue
+        const phaseLabel = phaseToLabel(phase);
+        if (phaseLabel) {
+            await this.github.setPhaseLabel(this.state.issue.number, phaseLabel);
+        }
     }
     /**
      * Post or update progress comment on the issue
@@ -223,7 +237,7 @@ ${emTable}${finalPRSection}${errorSection}
         catch (error) {
             console.error('Event handling failed:', error);
             if (this.state) {
-                this.state.phase = 'failed';
+                await this.setPhase('failed');
                 this.state.error = error.message;
                 await saveState(this.state);
                 await this.updateProgressComment(error.message);
@@ -238,6 +252,8 @@ ${emTable}${finalPRSection}${errorSection}
         if (!event.issueNumber) {
             throw new Error('Issue number required for issue_labeled event');
         }
+        // Ensure all orchestrator labels exist in the repo
+        await this.github.ensureLabelsExist();
         // Check if orchestration already in progress
         const existingBranch = await findWorkBranchForIssue(event.issueNumber);
         if (existingBranch) {
@@ -270,7 +286,7 @@ ${emTable}${finalPRSection}${errorSection}
         if (!this.state)
             throw new Error('No state');
         console.log('\n=== Phase: Director Analysis ===');
-        this.state.phase = 'analyzing';
+        await this.setPhase('analyzing');
         await saveState(this.state);
         await this.updateProgressComment();
         const { maxEms, maxWorkersPerEm } = this.state.config;
@@ -364,7 +380,7 @@ ${this.state.issue.body}
         if (setupEM) {
             // Run setup phase first
             this.state.projectSetup = { completed: false };
-            this.state.phase = 'project_setup';
+            await this.setPhase('project_setup');
             await this.updateProgressComment();
             // Create setup EM state
             this.state.ems = [{
@@ -404,7 +420,7 @@ ${this.state.issue.body}
                 reviewsAddressed: 0,
                 startedAt: new Date().toISOString()
             }));
-            this.state.phase = 'em_assignment';
+            await this.setPhase('em_assignment');
             await saveState(this.state, `chore: director assigned ${this.state.ems.length} EMs`);
             await this.updateProgressComment();
             // Start first EM
@@ -440,7 +456,7 @@ ${this.state.issue.body}
             reviewsAddressed: 0
         }));
         pendingEM.status = 'workers_running';
-        this.state.phase = 'worker_execution';
+        await this.setPhase('worker_execution');
         await saveState(this.state, `chore: EM-${pendingEM.id} assigned ${workerTasks.length} workers`);
         await this.updateProgressComment();
         // Start first worker
@@ -600,13 +616,13 @@ Implement this task now.`;
                     head: pendingWorker.branch,
                     base: em.branch
                 });
-                // Add label to PR
-                await this.github.addLabels(pr.number, [this.state.config.prLabel]);
+                // Add labels to PR (type + status + em association)
+                await this.github.setPRLabels(pr.number, TYPE_LABELS.WORKER, STATUS_LABELS.AWAITING_REVIEW, em.id);
                 pendingWorker.status = 'pr_created';
                 pendingWorker.prNumber = pr.number;
                 pendingWorker.prUrl = pr.html_url;
                 pendingWorker.completedAt = new Date().toISOString();
-                this.state.phase = 'worker_review';
+                await this.setPhase('worker_review');
                 await saveState(this.state, `chore: Worker-${pendingWorker.id} PR created (#${pr.number})`);
                 await this.updateProgressComment();
                 console.log(`Worker-${pendingWorker.id} PR created: ${pr.html_url}`);
@@ -715,6 +731,7 @@ Implement this task now.`;
                 }
                 if (result.merged) {
                     worker.status = 'merged';
+                    await this.github.setStatusLabel(worker.prNumber, STATUS_LABELS.MERGED);
                     console.log(`  Merged Worker-${worker.id} PR #${worker.prNumber}${result.alreadyMerged ? ' (was already merged)' : ''}`);
                 }
                 else {
@@ -722,6 +739,8 @@ Implement this task now.`;
                     console.warn(`  Could not merge Worker-${worker.id} PR #${worker.prNumber}: ${reason}`);
                     worker.status = 'failed';
                     worker.error = reason;
+                    const failLabel = reason.includes('conflict') ? STATUS_LABELS.CONFLICTS : STATUS_LABELS.FAILED;
+                    await this.github.setStatusLabel(worker.prNumber, failLabel);
                     addErrorToHistory(this.state, `Worker-${worker.id} merge failed: ${reason}`, `EM-${em.id}`);
                 }
             }
@@ -745,14 +764,15 @@ Implement this task now.`;
         const mergedWorkers = em.workers.filter(w => w.status === 'merged');
         // Create EM PR to work branch
         try {
+            const isSetupEM = em.focusArea === 'Project Setup';
             const pr = await this.github.createPullRequest({
                 title: `[EM-${em.id}] ${em.focusArea}: ${em.task.substring(0, 50)}`,
                 body: `## EM-${em.id}: ${em.focusArea}\n\n**Task:** ${em.task}\n\n**Workers:** ${em.workers.length} (${mergedWorkers.length} merged)\n\n---\n*Automated by Claude Code Orchestrator*`,
                 head: em.branch,
                 base: this.state.workBranch
             });
-            // Add label to PR
-            await this.github.addLabels(pr.number, [this.state.config.prLabel]);
+            // Add labels to PR (type + status)
+            await this.github.setPRLabels(pr.number, isSetupEM ? TYPE_LABELS.SETUP : TYPE_LABELS.EM, STATUS_LABELS.AWAITING_REVIEW);
             em.status = 'pr_created';
             em.prNumber = pr.number;
             em.prUrl = pr.html_url;
@@ -774,7 +794,7 @@ Implement this task now.`;
                 addErrorToHistory(this.state, `EM-${em.id} PR creation failed: ${errMsg}`, undefined);
             }
         }
-        this.state.phase = 'em_review';
+        await this.setPhase('em_review');
         await saveState(this.state, `chore: EM-${em.id} PR processed`);
         await this.updateProgressComment();
         // Start next EM if any
@@ -821,7 +841,7 @@ Implement this task now.`;
             // Add pending EMs to the active list
             this.state.ems.push(...this.state.pendingEMs);
             this.state.pendingEMs = [];
-            this.state.phase = 'em_assignment';
+            await this.setPhase('em_assignment');
             await saveState(this.state, `chore: setup complete, adding ${this.state.ems.length - 1} implementation EMs`);
             await this.updateProgressComment();
             // Start the next EM
@@ -851,6 +871,7 @@ Implement this task now.`;
                 }
                 if (result.merged) {
                     em.status = 'merged';
+                    await this.github.setStatusLabel(em.prNumber, STATUS_LABELS.MERGED);
                     console.log(`Merged EM-${em.id} PR #${em.prNumber}${result.alreadyMerged ? ' (was already merged)' : ''}`);
                 }
                 else {
@@ -858,6 +879,8 @@ Implement this task now.`;
                     console.warn(`Could not merge EM-${em.id} PR #${em.prNumber}: ${reason}`);
                     em.status = 'failed';
                     em.error = reason;
+                    const failLabel = reason.includes('conflict') ? STATUS_LABELS.CONFLICTS : STATUS_LABELS.FAILED;
+                    await this.github.setStatusLabel(em.prNumber, failLabel);
                     addErrorToHistory(this.state, `EM-${em.id} merge failed: ${reason}`, `PR #${em.prNumber}`);
                 }
             }
@@ -868,7 +891,7 @@ Implement this task now.`;
             const reason = 'No EMs merged - all skipped or failed';
             console.error(reason);
             addErrorToHistory(this.state, reason, `EMs status: ${this.state.ems.map(e => `EM${e.id}:${e.status}`).join(', ')}`);
-            this.state.phase = 'failed';
+            await this.setPhase('failed');
             this.state.error = reason;
             await saveState(this.state);
             await this.updateProgressComment(reason);
@@ -877,7 +900,7 @@ Implement this task now.`;
         // Pull latest work branch
         await GitOperations.checkout(this.state.workBranch);
         await GitOperations.pull(this.state.workBranch);
-        this.state.phase = 'final_merge';
+        await this.setPhase('final_merge');
         await saveState(this.state);
         await this.updateProgressComment();
         // Create final PR to main
@@ -921,10 +944,10 @@ Closes #${this.state.issue.number}
             head: this.state.workBranch,
             base: this.state.baseBranch
         });
-        // Add label to final PR
-        await this.github.addLabels(pr.number, [this.state.config.prLabel]);
+        // Add labels to final PR (type + status)
+        await this.github.setPRLabels(pr.number, TYPE_LABELS.FINAL, STATUS_LABELS.AWAITING_REVIEW);
         this.state.finalPr = { number: pr.number, url: pr.html_url, reviewsAddressed: 0 };
-        this.state.phase = 'final_review'; // Stay in final_review to handle reviews
+        await this.setPhase('final_review'); // Stay in final_review to handle reviews
         // Save state - keep state file to enable review handling
         // State file will be removed when PR is merged (in handlePRMerged)
         await saveState(this.state, 'chore: final PR created');
@@ -955,7 +978,8 @@ Closes #${this.state.issue.number}
         // Check if this is the final PR being merged
         if (this.state.finalPr?.number === event.prNumber) {
             console.log('Final PR merged! Marking orchestration complete.');
-            this.state.phase = 'complete';
+            await this.setPhase('complete');
+            await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.MERGED);
             // Remove state file from work branch
             try {
                 await execa('git', ['rm', '-f', '.orchestrator/state.json']);
@@ -1024,18 +1048,26 @@ Closes #${this.state.issue.number}
             for (const worker of em.workers) {
                 if (worker.prNumber === event.prNumber) {
                     console.log(`Addressing review on Worker-${worker.id} PR`);
+                    // Set status to addressing feedback while working
+                    await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.ADDRESSING_FEEDBACK);
                     await this.addressReview(worker.branch, event.prNumber, event.reviewBody || '');
                     worker.reviewsAddressed++;
                     worker.status = 'pr_created';
+                    // Set back to awaiting review after addressing
+                    await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.AWAITING_REVIEW);
                     await saveState(this.state);
                     return;
                 }
             }
             if (em.prNumber === event.prNumber) {
                 console.log(`Addressing review on EM-${em.id} PR`);
+                // Set status to addressing feedback while working
+                await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.ADDRESSING_FEEDBACK);
                 await this.addressReview(em.branch, event.prNumber, event.reviewBody || '');
                 em.reviewsAddressed++;
                 em.status = 'pr_created';
+                // Set back to awaiting review after addressing
+                await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.AWAITING_REVIEW);
                 await saveState(this.state);
                 return;
             }
@@ -1338,7 +1370,7 @@ ${reviewBody}
         if (pendingEMs.length > 0) {
             // There are EMs that haven't finished - continue worker execution
             console.log(`Found ${pendingEMs.length} EMs with pending work. Resuming worker execution.`);
-            this.state.phase = 'worker_execution';
+            await this.setPhase('worker_execution');
             this.state.error = undefined;
             addErrorToHistory(this.state, 'Recovered from failed state - resuming worker execution', undefined);
             await saveState(this.state);
@@ -1348,7 +1380,7 @@ ${reviewBody}
         else if (emsWithPendingPRs.length > 0) {
             // Workers done, but EM PRs haven't merged - try to merge them
             console.log(`Found ${emsWithPendingPRs.length} EM PRs to merge. Resuming EM merging.`);
-            this.state.phase = 'em_merging';
+            await this.setPhase('em_merging');
             this.state.error = undefined;
             addErrorToHistory(this.state, 'Recovered from failed state - resuming EM merging', undefined);
             await saveState(this.state);
@@ -1358,7 +1390,7 @@ ${reviewBody}
         else if (allWorkersComplete && !this.state.finalPr) {
             // All work done but no final PR - create it
             console.log('All EMs complete but no final PR. Creating final PR.');
-            this.state.phase = 'final_merge';
+            await this.setPhase('final_merge');
             this.state.error = undefined;
             addErrorToHistory(this.state, 'Recovered from failed state - creating final PR', undefined);
             await saveState(this.state);
@@ -1368,7 +1400,7 @@ ${reviewBody}
         else if (this.state.finalPr) {
             // Final PR exists - check if it needs review handling
             console.log(`Final PR #${this.state.finalPr.number} exists. Checking review status.`);
-            this.state.phase = 'final_review';
+            await this.setPhase('final_review');
             this.state.error = undefined;
             addErrorToHistory(this.state, 'Recovered from failed state - resuming final PR review', undefined);
             await saveState(this.state);

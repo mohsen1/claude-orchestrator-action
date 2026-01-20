@@ -45,6 +45,10 @@ export declare class EventDrivenOrchestrator {
      */
     private addErrorToHistory;
     /**
+     * Update the phase and sync the label on the issue
+     */
+    private setPhase;
+    /**
      * Post or update progress comment on the issue
      */
     private updateProgressComment;
