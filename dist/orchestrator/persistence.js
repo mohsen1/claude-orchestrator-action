@@ -123,8 +123,15 @@ export async function findWorkBranchForIssue(issueNumber) {
     // Work branches follow the pattern: cco/{issue_number}-*
     const branchPattern = `cco/${issueNumber}-`;
     try {
-        // List remote branches matching pattern
         const { execa } = await import('execa');
+        // Fetch remote branches first to ensure we see all branches
+        try {
+            await execa('git', ['fetch', 'origin']);
+        }
+        catch {
+            // Fetch might fail in some cases, continue anyway
+        }
+        // List remote branches matching pattern
         const { stdout } = await execa('git', ['branch', '-r', '--list', `origin/${branchPattern}*`]);
         const branches = stdout
             .split('\n')
