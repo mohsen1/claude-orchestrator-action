@@ -9,7 +9,7 @@
  * 4. Updates state and exits
  */
 import type { ClaudeConfig } from '../shared/config.js';
-export type EventType = 'issue_labeled' | 'push' | 'pull_request_opened' | 'pull_request_merged' | 'pull_request_review' | 'workflow_dispatch' | 'schedule';
+export type EventType = 'issue_labeled' | 'issue_closed' | 'push' | 'pull_request_opened' | 'pull_request_merged' | 'pull_request_review' | 'workflow_dispatch' | 'schedule';
 export interface OrchestratorEvent {
     type: EventType;
     issueNumber?: number;
@@ -49,6 +49,10 @@ export declare class EventDrivenOrchestrator {
      */
     private setPhase;
     /**
+     * Generate a smart executive summary based on current state
+     */
+    private generateExecutiveSummary;
+    /**
      * Post or update progress comment on the issue
      */
     private updateProgressComment;
@@ -61,11 +65,24 @@ export declare class EventDrivenOrchestrator {
      */
     private handleIssueLabeled;
     /**
+     * Handle issue closed - cleanup all branches and PRs
+     */
+    private handleIssueClosed;
+    /**
      * Run director analysis to break down issue into EM tasks
      */
     private runAnalysis;
     /**
-     * Start the next pending EM
+     * Start ALL pending EMs in parallel
+     * This is the key to parallel execution - all EMs work simultaneously
+     */
+    private startAllPendingEMs;
+    /**
+     * Start a single EM (called in parallel for multiple EMs)
+     */
+    private startSingleEM;
+    /**
+     * Start the next pending EM (legacy - for setup EM which must run first)
      */
     private startNextEM;
     /**
@@ -73,15 +90,31 @@ export declare class EventDrivenOrchestrator {
      */
     private breakdownEMTask;
     /**
-     * Start the next pending worker for an EM
+     * Start ALL workers for an EM in parallel
+     */
+    private startAllWorkersForEM;
+    /**
+     * Execute a single worker task (called in parallel)
+     */
+    private executeSingleWorker;
+    /**
+     * Build the prompt for a worker task
+     */
+    private buildWorkerPrompt;
+    /**
+     * Start the next pending worker for an EM (legacy sequential mode)
      * Errors are caught and logged, allowing orchestration to continue
      */
     private startNextWorker;
     /**
      * Wait for reviews before merging a PR
-     * Uses review_wait_minutes from config to allow automated reviewers (Copilot) time to post
+     * Polls for reviews to appear, then addresses any comments before allowing merge
      */
     private waitForReviewsBeforeMerge;
+    /**
+     * Address review comments on a PR before merging
+     */
+    private addressReviewComments;
     /**
      * Create EM PR after all workers are done
      */

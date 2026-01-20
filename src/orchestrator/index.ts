@@ -36,6 +36,7 @@ import {
 
 export type EventType = 
   | 'issue_labeled'        // Start orchestration
+  | 'issue_closed'         // Issue closed - cleanup everything
   | 'push'                 // Code pushed to a branch
   | 'pull_request_opened'  // PR opened
   | 'pull_request_merged'  // PR merged
@@ -128,6 +129,71 @@ export class EventDrivenOrchestrator {
   }
 
   /**
+   * Generate a smart executive summary based on current state
+   */
+  private generateExecutiveSummary(ctx: {
+    phase: string;
+    issueTitle: string;
+    emsCount: number;
+    totalWorkers: number;
+    mergedWorkers: number;
+    failedWorkers: number;
+    inProgressWorkers: number;
+    mergedEMs: number;
+    finalPr?: { number: number; url: string } | null;
+    errorCount: number;
+    emFocusAreas: string[];
+  }): string {
+    const { phase, issueTitle, emsCount, totalWorkers, mergedWorkers, failedWorkers, 
+            inProgressWorkers, mergedEMs, finalPr, errorCount, emFocusAreas } = ctx;
+
+    // Generate contextual summary based on phase and progress
+    const activeTeams = emFocusAreas.slice(0, 3).join(', ');
+    const moreTeams = emsCount > 3 ? ` and ${emsCount - 3} more` : '';
+
+    switch (phase) {
+      case 'initialized':
+        return `Starting automated implementation of "${issueTitle}". The orchestrator will analyze requirements and coordinate parallel development teams.`;
+      
+      case 'analyzing':
+        return `Breaking down "${issueTitle}" into parallel workstreams. Identifying key components and assigning specialized teams.`;
+      
+      case 'project_setup':
+        return `Initializing project foundation for "${issueTitle}". Setting up dependencies, configuration, and shared infrastructure before parallel work begins.`;
+      
+      case 'em_assignment':
+        return `Mobilizing ${emsCount} development teams: ${activeTeams}${moreTeams}. Each team will work independently on their focus area.`;
+      
+      case 'worker_execution':
+        return `${inProgressWorkers} developer(s) actively coding across ${emsCount} teams. Building: ${activeTeams}${moreTeams}. Progress: ${mergedWorkers}/${totalWorkers} tasks complete.`;
+      
+      case 'worker_review':
+        return `Code review in progress. ${mergedWorkers}/${totalWorkers} implementations merged${failedWorkers > 0 ? `, ${failedWorkers} need attention` : ''}. Teams: ${activeTeams}${moreTeams}.`;
+      
+      case 'em_merging':
+        return `Integrating team work. ${mergedEMs}/${emsCount} teams merged into main branch. Resolving any integration issues.`;
+      
+      case 'em_review':
+        return `Team PRs ready for final review. ${emsCount} specialized implementations covering: ${activeTeams}${moreTeams}.`;
+      
+      case 'final_merge':
+        return `All ${emsCount} teams complete! Creating final PR to deliver "${issueTitle}". ${totalWorkers} individual contributions integrated.`;
+      
+      case 'final_review':
+        return `Final implementation ready for review!${finalPr ? ` [PR #${finalPr.number}](${finalPr.url})` : ''} Includes work from ${emsCount} teams and ${mergedWorkers} merged contributions.`;
+      
+      case 'complete':
+        return `"${issueTitle}" successfully delivered! ${emsCount} teams collaborated on ${mergedWorkers} implementations. All code merged to main.`;
+      
+      case 'failed':
+        return `Implementation paused due to ${errorCount} error(s). Review the log below and consider restarting. Progress: ${mergedWorkers}/${totalWorkers} tasks were completed.`;
+      
+      default:
+        return `Orchestrating "${issueTitle}" with ${emsCount} teams and ${totalWorkers} parallel tasks.`;
+    }
+  }
+
+  /**
    * Post or update progress comment on the issue
    */
   private async updateProgressComment(error?: string): Promise<void> {
@@ -170,6 +236,29 @@ export class EventDrivenOrchestrator {
     const totalWorkers = ems.reduce((sum, em) => sum + em.workers.length, 0);
     const mergedWorkers = ems.reduce((sum, em) => sum + em.workers.filter(w => w.status === 'merged').length, 0);
     const mergedEMs = ems.filter(em => em.status === 'merged').length;
+    const failedWorkers = ems.reduce((sum, em) => sum + em.workers.filter(w => w.status === 'failed' || w.status === 'skipped').length, 0);
+    const inProgressWorkers = ems.reduce((sum, em) => sum + em.workers.filter(w => w.status === 'in_progress' || w.status === 'pr_created').length, 0);
+
+    // Build executive summary - generate smart summary using context
+    const executiveSummary = this.generateExecutiveSummary({
+      phase,
+      issueTitle: issue.title,
+      emsCount: ems.length,
+      totalWorkers,
+      mergedWorkers,
+      failedWorkers,
+      inProgressWorkers,
+      mergedEMs,
+      finalPr,
+      errorCount: errorHistory?.length || 0,
+      emFocusAreas: ems.map(em => em.focusArea)
+    });
+
+    // Add progress indicator
+    const progressPercent = totalWorkers > 0 ? Math.round((mergedWorkers / totalWorkers) * 100) : 0;
+    const progressBar = totalWorkers > 0 
+      ? `[${'█'.repeat(Math.floor(progressPercent / 10))}${'░'.repeat(10 - Math.floor(progressPercent / 10))}] ${progressPercent}%`
+      : '';
 
     // Build EM/Worker status table
     let emTable = '';
@@ -233,7 +322,9 @@ export class EventDrivenOrchestrator {
     // Build the full comment
     const body = `## 🤖 Orchestration Status
 
-${statusEmoji} **Phase:** ${phaseLabel}
+> ${executiveSummary}
+
+${statusEmoji} **Phase:** ${phaseLabel} ${progressBar}
 
 | | |
 |---|---|
@@ -264,6 +355,9 @@ ${emTable}${finalPRSection}${errorSection}
       switch (event.type) {
         case 'issue_labeled':
           await this.handleIssueLabeled(event);
+          break;
+        case 'issue_closed':
+          await this.handleIssueClosed(event);
           break;
         case 'pull_request_merged':
           await this.handlePRMerged(event);
@@ -343,6 +437,85 @@ ${emTable}${finalPRSection}${errorSection}
 
     // Move to analysis phase
     await this.runAnalysis();
+  }
+
+  /**
+   * Handle issue closed - cleanup all branches and PRs
+   */
+  private async handleIssueClosed(event: OrchestratorEvent): Promise<void> {
+    if (!event.issueNumber) {
+      console.log('Issue closed event missing issue number');
+      return;
+    }
+
+    console.log(`\n=== Issue #${event.issueNumber} CLOSED - Cleaning up orchestration ===`);
+
+    // Find the work branch for this issue
+    const workBranch = await findWorkBranchForIssue(event.issueNumber);
+    if (!workBranch) {
+      console.log('No work branch found for this issue - nothing to clean up');
+      return;
+    }
+
+    // Load state to get all branches and PRs
+    this.state = await this.loadStateFromWorkBranch(workBranch);
+    
+    // Collect all branches and PRs to clean up
+    const branchesToDelete: string[] = [workBranch];
+    const prsToClose: number[] = [];
+
+    if (this.state) {
+      // Collect EM and worker branches/PRs
+      for (const em of this.state.ems) {
+        branchesToDelete.push(em.branch);
+        if (em.prNumber) prsToClose.push(em.prNumber);
+        
+        for (const worker of em.workers) {
+          branchesToDelete.push(worker.branch);
+          if (worker.prNumber) prsToClose.push(worker.prNumber);
+        }
+      }
+
+      // Add final PR if exists
+      if (this.state.finalPr?.number) {
+        prsToClose.push(this.state.finalPr.number);
+      }
+    }
+
+    // Close all open PRs
+    console.log(`Closing ${prsToClose.length} PRs...`);
+    for (const prNumber of prsToClose) {
+      try {
+        const pr = await this.github.getPullRequest(prNumber);
+        if (pr.state === 'open') {
+          await this.github.getOctokit().rest.pulls.update({
+            owner: this.ctx.repo.owner,
+            repo: this.ctx.repo.name,
+            pull_number: prNumber,
+            state: 'closed'
+          });
+          console.log(`  Closed PR #${prNumber}`);
+        }
+      } catch (err) {
+        console.log(`  Could not close PR #${prNumber}: ${(err as Error).message}`);
+      }
+    }
+
+    // Delete all branches
+    console.log(`Deleting ${branchesToDelete.length} branches...`);
+    for (const branch of branchesToDelete) {
+      try {
+        await this.github.deleteBranch(branch);
+        console.log(`  Deleted branch: ${branch}`);
+      } catch (err) {
+        console.log(`  Could not delete branch ${branch}: ${(err as Error).message}`);
+      }
+    }
+
+    // Remove orchestrator labels from the issue
+    await this.github.removeOrchestratorLabels(event.issueNumber);
+
+    console.log(`\nCleanup complete for issue #${event.issueNumber}`);
   }
 
   /**
@@ -513,13 +686,75 @@ ${this.state.issue.body}
       await saveState(this.state, `chore: director assigned ${this.state.ems.length} EMs`);
       await this.updateProgressComment();
 
-      // Start first EM
-      await this.startNextEM();
+      // Start ALL EMs in parallel
+      await this.startAllPendingEMs();
     }
   }
 
   /**
-   * Start the next pending EM
+   * Start ALL pending EMs in parallel
+   * This is the key to parallel execution - all EMs work simultaneously
+   */
+  private async startAllPendingEMs(): Promise<void> {
+    if (!this.state) throw new Error('No state');
+
+    const pendingEMs = this.state.ems.filter(em => em.status === 'pending');
+    if (pendingEMs.length === 0) {
+      // All EMs have started, check if we need to create final PR
+      await this.checkFinalMerge();
+      return;
+    }
+
+    console.log(`\n=== Starting ${pendingEMs.length} EMs in PARALLEL ===`);
+
+    // Start all pending EMs in parallel
+    await Promise.all(pendingEMs.map(em => this.startSingleEM(em)));
+  }
+
+  /**
+   * Start a single EM (called in parallel for multiple EMs)
+   */
+  private async startSingleEM(em: EMState): Promise<void> {
+    if (!this.state) throw new Error('No state');
+
+    console.log(`\n=== Starting EM-${em.id}: ${em.focusArea} ===`);
+
+    try {
+      // Create EM branch from work branch
+      await this.github.createBranch(em.branch, this.state.workBranch);
+      console.log(`  Created branch ${em.branch}`);
+
+      // Break down into worker tasks
+      const workerTasks = await this.breakdownEMTask(em);
+
+      // Create worker states
+      em.workers = workerTasks.map(wt => ({
+        id: wt.worker_id,
+        task: wt.task,
+        files: wt.files,
+        branch: `${em.branch}-w-${wt.worker_id}`,
+        status: 'pending' as const,
+        reviewsAddressed: 0
+      }));
+
+      em.status = 'workers_running';
+      em.startedAt = new Date().toISOString();
+      
+      await saveState(this.state, `chore: EM-${em.id} assigned ${workerTasks.length} workers`);
+      await this.updateProgressComment();
+
+      // Start all workers for this EM in parallel
+      await this.startAllWorkersForEM(em);
+    } catch (error) {
+      console.error(`EM-${em.id} failed to start: ${(error as Error).message}`);
+      em.status = 'failed';
+      em.error = (error as Error).message;
+      addErrorToHistory(this.state, `EM-${em.id} failed to start: ${(error as Error).message}`, undefined);
+    }
+  }
+
+  /**
+   * Start the next pending EM (legacy - for setup EM which must run first)
    */
   private async startNextEM(): Promise<void> {
     if (!this.state) throw new Error('No state');
@@ -641,7 +876,126 @@ ${this.state.issue.body}
   }
 
   /**
-   * Start the next pending worker for an EM
+   * Start ALL workers for an EM in parallel
+   */
+  private async startAllWorkersForEM(em: EMState): Promise<void> {
+    if (!this.state) throw new Error('No state');
+
+    const pendingWorkers = em.workers.filter(w => w.status === 'pending');
+    if (pendingWorkers.length === 0) {
+      await this.createEMPullRequest(em);
+      return;
+    }
+
+    console.log(`  Starting ${pendingWorkers.length} workers in parallel for EM-${em.id}`);
+
+    // Start all workers in parallel
+    await Promise.all(pendingWorkers.map(worker => this.executeSingleWorker(em, worker)));
+
+    // After all workers complete, create EM PR
+    await this.createEMPullRequest(em);
+  }
+
+  /**
+   * Execute a single worker task (called in parallel)
+   */
+  private async executeSingleWorker(em: EMState, worker: typeof em.workers[0]): Promise<void> {
+    if (!this.state) throw new Error('No state');
+
+    console.log(`\n--- Starting Worker-${worker.id}: ${worker.task.substring(0, 50)}... ---`);
+
+    try {
+      // Create worker branch from EM branch using GitHub API (no local checkout needed)
+      await this.github.createBranch(worker.branch, em.branch);
+
+      worker.status = 'in_progress';
+      worker.startedAt = new Date().toISOString();
+
+      // Execute worker task using SDK (works in any directory)
+      const prompt = this.buildWorkerPrompt(worker);
+      const result = await this.sdkRunner.executeTask(prompt);
+
+      if (!result.success) {
+        worker.status = 'failed';
+        worker.error = result.error;
+        addErrorToHistory(this.state, `Worker-${worker.id} SDK execution failed: ${result.error}`, `EM-${em.id}`);
+        console.error(`Worker-${worker.id} failed: ${result.error}`);
+        return;
+      }
+
+      // The SDK runner commits changes - we need to push to the worker branch
+      // For parallel execution, we use GitHub API to create PR directly
+      
+      // Create worker PR
+      const pr = await this.github.createPullRequest({
+        title: `[EM-${em.id}/W-${worker.id}] ${worker.task.substring(0, 60)}`,
+        body: `## Worker Implementation\n\n**Task:** ${worker.task}\n\n---\n*Automated by Claude Code Orchestrator*`,
+        head: worker.branch,
+        base: em.branch
+      });
+
+      // Add labels to PR
+      await this.github.setPRLabels(
+        pr.number,
+        TYPE_LABELS.WORKER,
+        STATUS_LABELS.AWAITING_REVIEW,
+        em.id
+      );
+
+      worker.status = 'pr_created';
+      worker.prNumber = pr.number;
+      worker.prUrl = pr.html_url;
+      worker.completedAt = new Date().toISOString();
+
+      console.log(`Worker-${worker.id} PR created: ${pr.html_url}`);
+
+    } catch (error) {
+      const errorMsg = (error as Error).message;
+      
+      if (errorMsg.includes('No commits between') || errorMsg.includes('Validation Failed')) {
+        console.log(`Worker-${worker.id} skipped: no unique commits`);
+        worker.status = 'skipped';
+        worker.error = 'No unique commits';
+      } else {
+        console.error(`Worker-${worker.id} failed: ${errorMsg}`);
+        worker.status = 'failed';
+        worker.error = errorMsg;
+        addErrorToHistory(this.state, `Worker-${worker.id} failed: ${errorMsg}`, `EM-${em.id}`);
+      }
+    }
+
+    await this.updateProgressComment();
+  }
+
+  /**
+   * Build the prompt for a worker task
+   */
+  private buildWorkerPrompt(worker: { task: string; files?: string[] }): string {
+    return `You are a developer implementing a specific task. Make the actual code changes.
+
+**Your Task:** ${worker.task}
+
+**Files to work with:** ${worker.files?.length ? worker.files.join(', ') : 'Create whatever files are needed'}
+
+**Context - Original Issue:**
+${this.state?.issue.body || ''}
+
+**CRITICAL Instructions:**
+1. Create files directly in the current directory (NOT in a subdirectory)
+2. NEVER run "npm install" - only create config files
+3. Implement the task completely with clean, production-ready code
+4. Include necessary imports and exports
+
+**DO NOT create:**
+- node_modules/ directory
+- Any SUMMARY.md or documentation files
+- README.md (unless specifically asked)
+
+Implement this task now.`;
+  }
+
+  /**
+   * Start the next pending worker for an EM (legacy sequential mode)
    * Errors are caught and logged, allowing orchestration to continue
    */
   private async startNextWorker(em: EMState): Promise<void> {
@@ -796,41 +1150,122 @@ Implement this task now.`;
 
   /**
    * Wait for reviews before merging a PR
-   * Uses review_wait_minutes from config to allow automated reviewers (Copilot) time to post
+   * Polls for reviews to appear, then addresses any comments before allowing merge
    */
   private async waitForReviewsBeforeMerge(prNumber: number, prCreatedAt?: string): Promise<void> {
     const waitMinutes = this.state?.config.reviewWaitMinutes || 5;
-    const waitSeconds = waitMinutes * 60;
+    const maxWaitSeconds = waitMinutes * 60;
+    const pollIntervalSeconds = 15;
     
+    // Calculate initial wait based on PR creation time
+    let initialWait = maxWaitSeconds;
     if (prCreatedAt) {
       const createdTime = new Date(prCreatedAt).getTime();
-      const now = Date.now();
-      const elapsed = (now - createdTime) / 1000;
-      
-      if (elapsed < waitSeconds) {
-        const waitTime = Math.ceil(waitSeconds - elapsed);
-        console.log(`  Waiting ${Math.ceil(waitTime / 60)}m ${waitTime % 60}s for reviews on PR #${prNumber} (configured: ${waitMinutes}m)...`);
-        await new Promise(resolve => setTimeout(resolve, waitTime * 1000));
-      }
-    } else {
-      // No creation time, wait the full period
-      console.log(`  Waiting ${waitMinutes}m for reviews on PR #${prNumber}...`);
-      await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
+      const elapsed = (Date.now() - createdTime) / 1000;
+      initialWait = Math.max(0, maxWaitSeconds - elapsed);
     }
 
-    // Check for any unaddressed reviews
-    const reviews = await this.github.getPullRequestReviews(prNumber);
-    const hasChangesRequested = reviews.some(r => r.state === 'CHANGES_REQUESTED');
+    console.log(`  Waiting for reviews on PR #${prNumber} (max ${Math.ceil(initialWait / 60)}m)...`);
+
+    // Poll for reviews to appear
+    const startTime = Date.now();
+    let reviews: Awaited<ReturnType<typeof this.github.getPullRequestReviews>> = [];
+    let comments: Awaited<ReturnType<typeof this.github.getPullRequestComments>> = [];
     
-    if (hasChangesRequested) {
-      console.log(`  PR #${prNumber} has changes requested - will not merge yet`);
-      throw new Error('PR has unaddressed review comments');
+    while ((Date.now() - startTime) / 1000 < initialWait) {
+      // Check current review state
+      reviews = await this.github.getPullRequestReviews(prNumber);
+      comments = await this.github.getPullRequestComments(prNumber);
+      
+      // If we have reviews or comments, Copilot/reviewers have responded
+      if (reviews.length > 0 || comments.length > 0) {
+        console.log(`  PR #${prNumber}: Found ${reviews.length} reviews, ${comments.length} comments`);
+        break;
+      }
+      
+      // Wait before polling again
+      const remaining = initialWait - (Date.now() - startTime) / 1000;
+      if (remaining > pollIntervalSeconds) {
+        await new Promise(resolve => setTimeout(resolve, pollIntervalSeconds * 1000));
+      } else if (remaining > 0) {
+        await new Promise(resolve => setTimeout(resolve, remaining * 1000));
+        break;
+      }
     }
 
-    // Check for inline comments that might need addressing
-    const comments = await this.github.getPullRequestComments(prNumber);
+    // Final check for reviews and comments
+    reviews = await this.github.getPullRequestReviews(prNumber);
+    comments = await this.github.getPullRequestComments(prNumber);
+
+    // Check for CHANGES_REQUESTED - must address before merge
+    const hasChangesRequested = reviews.some(r => r.state === 'CHANGES_REQUESTED');
+    if (hasChangesRequested) {
+      console.log(`  PR #${prNumber} has CHANGES_REQUESTED - addressing feedback...`);
+      throw new Error('PR has changes requested - needs addressing');
+    }
+
+    // If there are inline review comments, we need to address them
     if (comments.length > 0) {
-      console.log(`  PR #${prNumber} has ${comments.length} review comments - will address them`);
+      console.log(`  PR #${prNumber} has ${comments.length} review comments - addressing before merge...`);
+      
+      // Get the PR to find its branch
+      const pr = await this.github.getPullRequest(prNumber);
+      
+      // Address the review comments
+      await this.addressReviewComments(prNumber, pr.head.ref, comments);
+      
+      // After addressing, wait a moment for GitHub to process
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      // Re-check for any new comments that might have appeared
+      const newComments = await this.github.getPullRequestComments(prNumber);
+      const unresolvedComments = newComments.filter(c => 
+        !comments.some(old => old.id === c.id)
+      );
+      
+      if (unresolvedComments.length > 0) {
+        console.log(`  PR #${prNumber}: ${unresolvedComments.length} new comments appeared after addressing`);
+      }
+    }
+
+    console.log(`  PR #${prNumber} ready for merge`);
+  }
+
+  /**
+   * Address review comments on a PR before merging
+   */
+  private async addressReviewComments(
+    prNumber: number, 
+    branch: string, 
+    comments: Awaited<ReturnType<typeof this.github.getPullRequestComments>>
+  ): Promise<void> {
+    if (comments.length === 0) return;
+
+    // Filter to actionable comments (not from bots responding to themselves)
+    const actionableComments = comments.filter(c => 
+      !c.body.includes('Fixed!') && 
+      !c.body.includes('_Automated response_') &&
+      c.body.length > 10
+    );
+
+    if (actionableComments.length === 0) {
+      console.log(`    No actionable comments to address`);
+      return;
+    }
+
+    console.log(`    Addressing ${actionableComments.length} review comments...`);
+
+    // Checkout the branch
+    await GitOperations.checkout(branch);
+
+    // Process comments
+    await this.processInlineComments(prNumber, actionableComments, branch);
+
+    // Commit and push any changes
+    const hasChanges = await GitOperations.hasUncommittedChanges();
+    if (hasChanges) {
+      await GitOperations.commitAndPush('fix: address review comments before merge', branch);
+      console.log(`    Committed fixes for review comments`);
     }
   }
 
@@ -994,11 +1429,12 @@ Implement this task now.`;
       this.state.pendingEMs = [];
       await this.setPhase('em_assignment');
       
-      await saveState(this.state, `chore: setup complete, adding ${this.state.ems.length - 1} implementation EMs`);
+      await saveState(this.state, `chore: setup complete, starting ${this.state.ems.length - 1} EMs in PARALLEL`);
       await this.updateProgressComment();
       
-      // Start the next EM
-      await this.startNextEM();
+      // Start ALL pending EMs in parallel (the key to parallel execution!)
+      console.log(`\n=== Starting ${this.state.ems.filter(e => e.status === 'pending').length} EMs in PARALLEL ===`);
+      await this.startAllPendingEMs();
       return;
     }
 
