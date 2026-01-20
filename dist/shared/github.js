@@ -3,7 +3,7 @@
  * Provides methods for common GitHub operations used by the orchestrator
  */
 import { getOctokit } from '@actions/github';
-import { getAllOrchestratorLabels, isOrchestratorLabel, LABEL_PREFIXES, BASE_LABEL } from './labels.js';
+import { getAllOrchestratorLabels, isOrchestratorLabel, LABEL_PREFIXES, BASE_LABEL, ORCHESTRATOR_COMMENT_MARKER } from './labels.js';
 /**
  * GitHub API client for orchestrator operations
  */
@@ -163,7 +163,8 @@ export class GitHubClient {
                 issue_number: issueNumber,
                 per_page: 100
             });
-            const orchestratorComment = comments.find(comment => comment.body?.includes('## 🤖 Orchestration Status'));
+            // Look for hidden marker comment (more reliable than visible title)
+            const orchestratorComment = comments.find(comment => comment.body?.includes(ORCHESTRATOR_COMMENT_MARKER));
             if (orchestratorComment) {
                 // Update existing comment
                 await this.octokit.rest.issues.updateComment({

@@ -11,7 +11,8 @@ import {
   StatusLabel,
   TypeLabel,
   PhaseLabel,
-  BASE_LABEL
+  BASE_LABEL,
+  ORCHESTRATOR_COMMENT_MARKER
 } from './labels.js';
 
 // GitHub repository context
@@ -224,8 +225,9 @@ export class GitHubClient {
         per_page: 100
       });
 
+      // Look for hidden marker comment (more reliable than visible title)
       const orchestratorComment = comments.find(comment =>
-        comment.body?.includes('## 🤖 Orchestration Status')
+        comment.body?.includes(ORCHESTRATOR_COMMENT_MARKER)
       );
 
       if (orchestratorComment) {

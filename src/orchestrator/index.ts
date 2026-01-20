@@ -31,7 +31,8 @@ import type { ClaudeConfig } from '../shared/config.js';
 import {
   STATUS_LABELS,
   TYPE_LABELS,
-  phaseToLabel
+  phaseToLabel,
+  ORCHESTRATOR_COMMENT_MARKER
 } from '../shared/labels.js';
 
 export type EventType = 
@@ -319,8 +320,9 @@ export class EventDrivenOrchestrator {
       ? `\n### Final PR\n[#${finalPr.number}](${finalPr.url}) - Reviews addressed: ${finalPr.reviewsAddressed || 0}\n`
       : '';
 
-    // Build the full comment
-    const body = `## 🤖 Orchestration Status
+    // Build the full comment with hidden marker for reliable detection
+    const body = `${ORCHESTRATOR_COMMENT_MARKER}
+## Claude Code Orchestrator Status
 
 > ${executiveSummary}
 

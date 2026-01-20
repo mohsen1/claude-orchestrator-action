@@ -18,7 +18,7 @@ import { extractJson } from '../shared/json.js';
 import { slugify, getDirectorBranch } from '../shared/branches.js';
 import { createInitialState, areAllWorkersComplete, hasSuccessfulWorkers, getNextPendingWorker, addErrorToHistory } from './state.js';
 import { loadState, saveState, initializeState, findWorkBranchForIssue } from './persistence.js';
-import { STATUS_LABELS, TYPE_LABELS, phaseToLabel } from '../shared/labels.js';
+import { STATUS_LABELS, TYPE_LABELS, phaseToLabel, ORCHESTRATOR_COMMENT_MARKER } from '../shared/labels.js';
 export class EventDrivenOrchestrator {
     ctx;
     github;
@@ -230,8 +230,9 @@ export class EventDrivenOrchestrator {
         const finalPRSection = finalPr
             ? `\n### Final PR\n[#${finalPr.number}](${finalPr.url}) - Reviews addressed: ${finalPr.reviewsAddressed || 0}\n`
             : '';
-        // Build the full comment
-        const body = `## 🤖 Orchestration Status
+        // Build the full comment with hidden marker for reliable detection
+        const body = `${ORCHESTRATOR_COMMENT_MARKER}
+## Claude Code Orchestrator Status
 
 > ${executiveSummary}
 

@@ -11,6 +11,11 @@
  * - cco-em-{id} : Which EM this belongs to (for workers)
  * - cco-phase-* : Current phase (for issues)
  */
+/**
+ * Hidden HTML comment marker used to identify orchestrator comments
+ * This is more reliable than searching for visible text which could be edited
+ */
+export const ORCHESTRATOR_COMMENT_MARKER = '<!-- cco-orchestrator-comment -->';
 // Base label - all orchestrator PRs get this
 export const BASE_LABEL = 'cco-managed';
 // Status labels - mutually exclusive, one per PR at a time
