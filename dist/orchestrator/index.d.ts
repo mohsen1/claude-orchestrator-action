@@ -70,6 +70,7 @@ export declare class EventDrivenOrchestrator {
     private breakdownEMTask;
     /**
      * Start the next pending worker for an EM
+     * Errors are caught and logged, allowing orchestration to continue
      */
     private startNextWorker;
     /**
@@ -121,6 +122,11 @@ export declare class EventDrivenOrchestrator {
      * Handle progress check - continue any pending work
      */
     private handleProgressCheck;
+    /**
+     * Attempt to recover from failed state
+     * Looks at what work was done and tries to continue from there
+     */
+    private attemptRecovery;
     /**
      * Continue worker execution
      */

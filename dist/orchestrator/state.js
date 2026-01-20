@@ -48,16 +48,39 @@ export function parseState(json) {
     return state;
 }
 /**
- * Check if all workers for an EM are complete (merged or approved)
+ * Check if all workers for an EM are complete (merged, approved, or skipped)
  */
 export function areAllWorkersComplete(em) {
-    return em.workers.every(w => w.status === 'merged' || w.status === 'approved');
+    return em.workers.every(w => w.status === 'merged' ||
+        w.status === 'approved' ||
+        w.status === 'skipped' ||
+        w.status === 'failed');
 }
 /**
- * Check if all EMs are complete (merged)
+ * Check if EM has any successfully merged workers
+ */
+export function hasSuccessfulWorkers(em) {
+    return em.workers.some(w => w.status === 'merged' || w.status === 'approved');
+}
+/**
+ * Check if all EMs are complete (merged or skipped)
  */
 export function areAllEMsComplete(state) {
-    return state.ems.every(em => em.status === 'merged');
+    return state.ems.every(em => em.status === 'merged' || em.status === 'skipped');
+}
+/**
+ * Add an error to the error history
+ */
+export function addErrorToHistory(state, message, context) {
+    if (!state.errorHistory) {
+        state.errorHistory = [];
+    }
+    state.errorHistory.push({
+        timestamp: new Date().toISOString(),
+        phase: state.phase,
+        message,
+        context
+    });
 }
 /**
  * Get next pending worker for an EM

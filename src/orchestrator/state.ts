@@ -26,7 +26,9 @@ export type WorkerStatus =
   | 'pr_created'       // PR created, waiting for review
   | 'changes_requested'// Review requested changes
   | 'approved'         // PR approved
-  | 'merged';          // PR merged into EM branch
+  | 'merged'           // PR merged into EM branch
+  | 'skipped'          // Skipped due to error (no commits, conflicts, etc.)
+  | 'failed';          // Failed but orchestration continues
 
 export type EMStatus = 
   | 'pending'          // Not started
@@ -35,7 +37,9 @@ export type EMStatus =
   | 'pr_created'       // EM PR created to work branch
   | 'changes_requested'// Review requested changes
   | 'approved'         // PR approved
-  | 'merged';          // PR merged into work branch
+  | 'merged'           // PR merged into work branch
+  | 'skipped'          // Skipped (no commits or all workers failed)
+  | 'failed';          // Failed but orchestration continues
 
 export interface WorkerState {
   id: number;
@@ -199,17 +203,48 @@ export function parseState(json: string): OrchestratorState {
 }
 
 /**
- * Check if all workers for an EM are complete (merged or approved)
+ * Check if all workers for an EM are complete (merged, approved, or skipped)
  */
 export function areAllWorkersComplete(em: EMState): boolean {
-  return em.workers.every(w => w.status === 'merged' || w.status === 'approved');
+  return em.workers.every(w => 
+    w.status === 'merged' || 
+    w.status === 'approved' || 
+    w.status === 'skipped' ||
+    w.status === 'failed'
+  );
 }
 
 /**
- * Check if all EMs are complete (merged)
+ * Check if EM has any successfully merged workers
+ */
+export function hasSuccessfulWorkers(em: EMState): boolean {
+  return em.workers.some(w => w.status === 'merged' || w.status === 'approved');
+}
+
+/**
+ * Check if all EMs are complete (merged or skipped)
  */
 export function areAllEMsComplete(state: OrchestratorState): boolean {
-  return state.ems.every(em => em.status === 'merged');
+  return state.ems.every(em => em.status === 'merged' || em.status === 'skipped');
+}
+
+/**
+ * Add an error to the error history
+ */
+export function addErrorToHistory(
+  state: OrchestratorState, 
+  message: string, 
+  context?: string
+): void {
+  if (!state.errorHistory) {
+    state.errorHistory = [];
+  }
+  state.errorHistory.push({
+    timestamp: new Date().toISOString(),
+    phase: state.phase,
+    message,
+    context
+  });
 }
 
 /**

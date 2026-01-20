@@ -6,8 +6,8 @@
  * read state, take action, update state, and exit.
  */
 export type Phase = 'initialized' | 'analyzing' | 'project_setup' | 'em_assignment' | 'worker_execution' | 'worker_review' | 'em_merging' | 'em_review' | 'final_merge' | 'final_review' | 'complete' | 'failed';
-export type WorkerStatus = 'pending' | 'in_progress' | 'pr_created' | 'changes_requested' | 'approved' | 'merged';
-export type EMStatus = 'pending' | 'workers_running' | 'workers_complete' | 'pr_created' | 'changes_requested' | 'approved' | 'merged';
+export type WorkerStatus = 'pending' | 'in_progress' | 'pr_created' | 'changes_requested' | 'approved' | 'merged' | 'skipped' | 'failed';
+export type EMStatus = 'pending' | 'workers_running' | 'workers_complete' | 'pr_created' | 'changes_requested' | 'approved' | 'merged' | 'skipped' | 'failed';
 export interface WorkerState {
     id: number;
     task: string;
@@ -113,13 +113,21 @@ export declare function serializeState(state: OrchestratorState): string;
  */
 export declare function parseState(json: string): OrchestratorState;
 /**
- * Check if all workers for an EM are complete (merged or approved)
+ * Check if all workers for an EM are complete (merged, approved, or skipped)
  */
 export declare function areAllWorkersComplete(em: EMState): boolean;
 /**
- * Check if all EMs are complete (merged)
+ * Check if EM has any successfully merged workers
+ */
+export declare function hasSuccessfulWorkers(em: EMState): boolean;
+/**
+ * Check if all EMs are complete (merged or skipped)
  */
 export declare function areAllEMsComplete(state: OrchestratorState): boolean;
+/**
+ * Add an error to the error history
+ */
+export declare function addErrorToHistory(state: OrchestratorState, message: string, context?: string): void;
 /**
  * Get next pending worker for an EM
  */

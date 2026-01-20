@@ -16,7 +16,7 @@ import { ClaudeCodeRunner, generateSessionId } from '../shared/claude.js';
 import { ConfigManager } from '../shared/config.js';
 import { extractJson } from '../shared/json.js';
 import { slugify, getDirectorBranch } from '../shared/branches.js';
-import { createInitialState, areAllWorkersComplete, getNextPendingWorker } from './state.js';
+import { createInitialState, areAllWorkersComplete, hasSuccessfulWorkers, getNextPendingWorker, addErrorToHistory } from './state.js';
 import { loadState, saveState, initializeState, findWorkBranchForIssue } from './persistence.js';
 export class EventDrivenOrchestrator {
     ctx;
@@ -299,14 +299,21 @@ ${this.state.issue.body}
 2. Break this issue down into EM (Engineering Manager) tasks. Each EM focuses on a distinct area.
 3. Provide a brief summary for the PR description.
 
+**CRITICAL: FILE OWNERSHIP (most important rule):**
+- **EACH EM MUST OWN COMPLETELY SEPARATE FILES/DIRECTORIES**
+- NO two EMs can create or modify the same file - this causes merge conflicts!
+- Assign EXPLICIT directory ownership to each EM:
+  - EM-1: "owns src/models/, src/lib/storage.ts"
+  - EM-2: "owns src/components/, src/pages/"
+  - EM-3: "owns src/api/, src/middleware/"
+- Files that multiple EMs need (like types) should be created by the FIRST EM and only IMPORTED by others
+- Include "files_owned" array in each EM's output to make ownership clear
+
 **Important Guidelines:**
 - If this is a new project, include a "Project Setup" EM (id: 0) that runs FIRST
-- Project Setup EM should create ALL setup files: .gitignore, package.json, tsconfig.json
+- Project Setup EM should create ALL setup files: .gitignore, package.json, tsconfig.json, AND shared types
 - NO other EM should create setup files - they assume setup is done
-- Other EMs should wait until setup is complete
-- **EMs MUST have completely non-overlapping responsibilities and files**
-- Each EM owns specific files/directories that NO other EM touches
-- Example: EM-1 owns src/types.ts and src/storage.ts, EM-2 owns src/cli.ts and src/commands/
+- Other EMs IMPORT from setup-created files, never modify them
 
 **Team Sizing - USE ALL AVAILABLE CAPACITY for complex tasks:**
 - You have up to ${maxEms} EMs available (not counting setup)
@@ -324,8 +331,9 @@ ${this.state.issue.body}
   "ems": [
     {
       "em_id": 0,
-      "task": "Set up project foundation with .gitignore, package.json, tsconfig.json",
+      "task": "Set up project foundation with .gitignore, package.json, tsconfig.json, and shared types",
       "focus_area": "Project Setup",
+      "files_owned": [".gitignore", "package.json", "tsconfig.json", "src/types.ts"],
       "estimated_workers": 1,
       "must_complete_first": true
     },
@@ -333,6 +341,7 @@ ${this.state.issue.body}
       "em_id": 1,
       "task": "Description of what this EM should accomplish",
       "focus_area": "e.g., Core Logic, UI, Testing",
+      "files_owned": ["src/models/", "src/lib/"],
       "estimated_workers": 2,
       "must_complete_first": false
     }
@@ -452,14 +461,14 @@ ${this.state.issue.body}
 **Context - Original Issue:**
 ${this.state.issue.body}
 
-**CRITICAL Constraints:**
+**CRITICAL: FILE OWNERSHIP (Workers MUST NOT overlap):**
 - You can use up to ${maxWorkersPerEm} workers - USE MORE for complex tasks!
-- **EACH WORKER MUST HAVE COMPLETELY SEPARATE FILES** - NO overlap between workers!
-- If Worker-1 creates src/types.ts, NO other worker should touch that file
-- Each task should be completable independently without modifying other workers' files
+- **EACH WORKER MUST CREATE/MODIFY COMPLETELY DIFFERENT FILES** - NO overlap!
+- Overlapping files cause MERGE CONFLICTS that CRASH the entire orchestration!
 - Specify EXACTLY which files each worker should create or modify
 - Tasks should be concrete (e.g., "Create Calculator class in src/calculator.ts")
 - If a task requires multiple related files, assign them ALL to the SAME worker
+- Workers can IMPORT from each other's files but NEVER MODIFY them
 
 **Worker Sizing:**
 - Simple EM task: 1-2 workers
@@ -467,14 +476,19 @@ ${this.state.issue.body}
 - Complex EM task: USE ALL ${maxWorkersPerEm} workers
 - More workers = parallel execution = faster delivery
 
-**Example of GOOD division:**
-- Worker-1: src/types.ts (types only)
-- Worker-2: src/storage.ts (storage only, imports from types.ts but doesn't modify it)  
-- Worker-3: src/notes.ts (notes only, imports from types.ts and storage.ts)
+**Example of GOOD division (no file overlap):**
+- Worker-1: Creates src/types.ts (types only)
+- Worker-2: Creates src/storage.ts (imports from types.ts but doesn't modify it)  
+- Worker-3: Creates src/notes.ts (imports from types.ts and storage.ts)
 
-**Example of BAD division:**
+**Example of BAD division (will cause conflicts):**
 - Worker-1: src/types.ts
-- Worker-2: src/types.ts, src/storage.ts  <- BAD! Overlaps with Worker-1
+- Worker-2: src/types.ts, src/storage.ts  <- FATAL! Overlaps with Worker-1
+
+**File Assignment Rules:**
+- Each file appears in EXACTLY ONE worker's files array
+- Shared utilities/types should be in one worker, imported by others
+- Test files belong to the worker who creates the source file
 
 **Output ONLY a JSON array (no other text):**
 [
@@ -502,6 +516,7 @@ ${this.state.issue.body}
     }
     /**
      * Start the next pending worker for an EM
+     * Errors are caught and logged, allowing orchestration to continue
      */
     async startNextWorker(em) {
         if (!this.state)
@@ -513,14 +528,15 @@ ${this.state.issue.body}
             return;
         }
         console.log(`\n--- Starting Worker-${pendingWorker.id}: ${pendingWorker.task.substring(0, 50)}... ---`);
-        // Create worker branch
-        await GitOperations.checkout(em.branch);
-        await GitOperations.createBranch(pendingWorker.branch, em.branch);
-        pendingWorker.status = 'in_progress';
-        pendingWorker.startedAt = new Date().toISOString();
-        await saveState(this.state);
-        // Execute worker task
-        const prompt = `You are a developer implementing a specific task. Make the actual code changes.
+        try {
+            // Create worker branch
+            await GitOperations.checkout(em.branch);
+            await GitOperations.createBranch(pendingWorker.branch, em.branch);
+            pendingWorker.status = 'in_progress';
+            pendingWorker.startedAt = new Date().toISOString();
+            await saveState(this.state);
+            // Execute worker task
+            const prompt = `You are a developer implementing a specific task. Make the actual code changes.
 
 **Your Task:** ${pendingWorker.task}
 
@@ -553,40 +569,84 @@ ${this.state.issue.body}
 4. Other config files as needed
 
 Implement this task now.`;
-        const result = await this.sdkRunner.executeTask(prompt);
-        if (!result.success) {
-            pendingWorker.status = 'pending'; // Reset to retry
-            pendingWorker.error = result.error;
+            const result = await this.sdkRunner.executeTask(prompt);
+            if (!result.success) {
+                // Mark worker as failed but continue with others
+                pendingWorker.status = 'failed';
+                pendingWorker.error = result.error;
+                addErrorToHistory(this.state, `Worker-${pendingWorker.id} SDK execution failed: ${result.error}`, `EM-${em.id}`);
+                await saveState(this.state);
+                await this.updateProgressComment();
+                console.error(`Worker-${pendingWorker.id} failed: ${result.error} - continuing with next worker`);
+                // Continue with next worker instead of throwing
+                await this.startNextWorker(em);
+                return;
+            }
+            // Commit and push
+            const hasChanges = await GitOperations.hasUncommittedChanges();
+            if (hasChanges) {
+                await GitOperations.commitAndPush(`feat(em-${em.id}/worker-${pendingWorker.id}): ${pendingWorker.task.substring(0, 50)}`, pendingWorker.branch);
+            }
+            else {
+                // No changes - worker didn't create anything
+                console.log(`Worker-${pendingWorker.id} produced no changes`);
+                await GitOperations.push(pendingWorker.branch);
+            }
+            // Try to create worker PR
+            try {
+                const pr = await this.github.createPullRequest({
+                    title: `[EM-${em.id}/W-${pendingWorker.id}] ${pendingWorker.task.substring(0, 60)}`,
+                    body: `## Worker Implementation\n\n**Task:** ${pendingWorker.task}\n\n---\n*Automated by Claude Code Orchestrator*`,
+                    head: pendingWorker.branch,
+                    base: em.branch
+                });
+                // Add label to PR
+                await this.github.addLabels(pr.number, [this.state.config.prLabel]);
+                pendingWorker.status = 'pr_created';
+                pendingWorker.prNumber = pr.number;
+                pendingWorker.prUrl = pr.html_url;
+                pendingWorker.completedAt = new Date().toISOString();
+                this.state.phase = 'worker_review';
+                await saveState(this.state, `chore: Worker-${pendingWorker.id} PR created (#${pr.number})`);
+                await this.updateProgressComment();
+                console.log(`Worker-${pendingWorker.id} PR created: ${pr.html_url}`);
+            }
+            catch (prError) {
+                const errorMsg = prError.message;
+                // Handle "no commits between" error - worker produced no unique changes
+                if (errorMsg.includes('No commits between') || errorMsg.includes('Validation Failed')) {
+                    console.log(`Worker-${pendingWorker.id} skipped: no unique commits (${errorMsg})`);
+                    pendingWorker.status = 'skipped';
+                    pendingWorker.error = 'No unique commits - worker output already in base branch';
+                    addErrorToHistory(this.state, `Worker-${pendingWorker.id} skipped: ${errorMsg}`, `EM-${em.id}`);
+                    await saveState(this.state);
+                    await this.updateProgressComment();
+                }
+                else {
+                    // Other PR creation errors - mark as failed but continue
+                    console.error(`Worker-${pendingWorker.id} PR creation failed: ${errorMsg}`);
+                    pendingWorker.status = 'failed';
+                    pendingWorker.error = errorMsg;
+                    addErrorToHistory(this.state, `Worker-${pendingWorker.id} PR creation failed: ${errorMsg}`, `EM-${em.id}`);
+                    await saveState(this.state);
+                    await this.updateProgressComment();
+                }
+            }
+            // Continue with next worker
+            await this.startNextWorker(em);
+        }
+        catch (error) {
+            // Catch-all for unexpected errors - mark worker as failed and continue
+            const errorMsg = error.message;
+            console.error(`Worker-${pendingWorker.id} unexpected error: ${errorMsg}`);
+            pendingWorker.status = 'failed';
+            pendingWorker.error = errorMsg;
+            addErrorToHistory(this.state, `Worker-${pendingWorker.id} unexpected error: ${errorMsg}`, `EM-${em.id}`);
             await saveState(this.state);
-            throw new Error(`Worker-${pendingWorker.id} failed: ${result.error}`);
+            await this.updateProgressComment();
+            // Continue with next worker instead of crashing
+            await this.startNextWorker(em);
         }
-        // Commit and push
-        const hasChanges = await GitOperations.hasUncommittedChanges();
-        if (hasChanges) {
-            await GitOperations.commitAndPush(`feat(em-${em.id}/worker-${pendingWorker.id}): ${pendingWorker.task.substring(0, 50)}`, pendingWorker.branch);
-        }
-        else {
-            await GitOperations.push(pendingWorker.branch);
-        }
-        // Create worker PR
-        const pr = await this.github.createPullRequest({
-            title: `[EM-${em.id}/W-${pendingWorker.id}] ${pendingWorker.task.substring(0, 60)}`,
-            body: `## Worker Implementation\n\n**Task:** ${pendingWorker.task}\n\n---\n*Automated by Claude Code Orchestrator*`,
-            head: pendingWorker.branch,
-            base: em.branch
-        });
-        // Add label to PR
-        await this.github.addLabels(pr.number, [this.state.config.prLabel]);
-        pendingWorker.status = 'pr_created';
-        pendingWorker.prNumber = pr.number;
-        pendingWorker.prUrl = pr.html_url;
-        pendingWorker.completedAt = new Date().toISOString();
-        this.state.phase = 'worker_review';
-        await saveState(this.state, `chore: Worker-${pendingWorker.id} PR created (#${pr.number})`);
-        await this.updateProgressComment();
-        console.log(`Worker-${pendingWorker.id} PR created: ${pr.html_url}`);
-        // Continue with next worker or merge
-        await this.startNextWorker(em);
     }
     /**
      * Wait for reviews before merging a PR
@@ -639,6 +699,7 @@ Implement this task now.`;
                 }
                 catch (err) {
                     console.log(`  Skipping merge of Worker-${worker.id} PR: ${err.message}`);
+                    addErrorToHistory(this.state, `Worker-${worker.id} review wait failed: ${err.message}`, `EM-${em.id}`);
                     continue;
                 }
                 let result = await this.github.mergePullRequest(worker.prNumber);
@@ -657,24 +718,31 @@ Implement this task now.`;
                     console.log(`  Merged Worker-${worker.id} PR #${worker.prNumber}${result.alreadyMerged ? ' (was already merged)' : ''}`);
                 }
                 else {
-                    console.warn(`  Could not merge Worker-${worker.id} PR #${worker.prNumber}: ${result.error}`);
+                    const reason = result.error || 'Unknown';
+                    console.warn(`  Could not merge Worker-${worker.id} PR #${worker.prNumber}: ${reason}`);
+                    worker.status = 'failed';
+                    worker.error = reason;
+                    addErrorToHistory(this.state, `Worker-${worker.id} merge failed: ${reason}`, `EM-${em.id}`);
                 }
             }
         }
         // Pull latest EM branch
         await GitOperations.checkout(em.branch);
         await GitOperations.pull(em.branch);
-        // Check if any workers were actually merged
-        const mergedWorkers = em.workers.filter(w => w.status === 'merged');
-        if (mergedWorkers.length === 0) {
-            console.warn(`EM-${em.id}: No workers merged successfully. Skipping EM PR.`);
-            em.status = 'pr_created'; // Mark as done anyway to continue flow
-            em.error = 'No workers merged - all had conflicts';
+        // Check if this EM has any successful workers (merged or approved)
+        if (!hasSuccessfulWorkers(em)) {
+            const reason = 'No workers merged - all skipped/failed';
+            console.warn(`EM-${em.id}: ${reason}. Marking as skipped.`);
+            em.status = 'skipped';
+            em.error = reason;
+            addErrorToHistory(this.state, `EM-${em.id} skipped: ${reason}`, `WorkersStatus: ${em.workers.map(w => `W${w.id}:${w.status}`).join(', ')}`);
             await saveState(this.state);
+            await this.updateProgressComment();
             // Continue to next EM
             await this.startNextEM();
             return;
         }
+        const mergedWorkers = em.workers.filter(w => w.status === 'merged');
         // Create EM PR to work branch
         try {
             const pr = await this.github.createPullRequest({
@@ -692,12 +760,18 @@ Implement this task now.`;
         }
         catch (error) {
             const errMsg = error.message;
-            if (errMsg.includes('No commits between')) {
-                console.warn(`EM-${em.id}: No commits to PR (branch same as base). Marking as merged.`);
-                em.status = 'merged';
+            if (errMsg.includes('No commits between') || errMsg.includes('Validation Failed')) {
+                console.warn(`EM-${em.id}: No unique commits to PR (branch same as base). Marking as skipped.`);
+                em.status = 'skipped';
+                em.error = 'Branch identical to base - no unique commits';
+                addErrorToHistory(this.state, `EM-${em.id} skipped: ${errMsg}`, 'No diff from work branch');
             }
             else {
-                throw error;
+                // Other PR errors - mark EM as failed but continue
+                console.error(`EM-${em.id} PR creation failed: ${errMsg}`);
+                em.status = 'failed';
+                em.error = errMsg;
+                addErrorToHistory(this.state, `EM-${em.id} PR creation failed: ${errMsg}`, undefined);
             }
         }
         this.state.phase = 'em_review';
@@ -712,8 +786,12 @@ Implement this task now.`;
     async checkFinalMerge() {
         if (!this.state)
             throw new Error('No state');
-        // Check if all current EMs have PRs created or merged
-        const allEMsReady = this.state.ems.every(em => em.status === 'pr_created' || em.status === 'approved' || em.status === 'merged');
+        // Check if all current EMs have PRs created, merged, or skipped
+        const allEMsReady = this.state.ems.every(em => em.status === 'pr_created' ||
+            em.status === 'approved' ||
+            em.status === 'merged' ||
+            em.status === 'skipped' ||
+            em.status === 'failed');
         if (!allEMsReady) {
             console.log('Not all EMs are ready for final merge yet');
             return;
@@ -721,13 +799,22 @@ Implement this task now.`;
         // If there are pending EMs (from setup phase), add them now and continue
         if (this.state.pendingEMs && this.state.pendingEMs.length > 0) {
             console.log(`\n=== Adding ${this.state.pendingEMs.length} pending EMs after setup ===`);
-            // Merge setup EM first
+            // Merge setup EM first (wait for reviews)
             for (const em of this.state.ems) {
                 if (em.prNumber && (em.status === 'pr_created' || em.status === 'approved')) {
+                    try {
+                        await this.waitForReviewsBeforeMerge(em.prNumber, em.completedAt);
+                    }
+                    catch (err) {
+                        console.log(`  Skipping review wait for EM-${em.id}: ${err.message}`);
+                    }
                     const result = await this.github.mergePullRequest(em.prNumber);
                     if (result.merged) {
                         em.status = 'merged';
                         console.log(`Merged setup EM-${em.id} PR #${em.prNumber}`);
+                    }
+                    else {
+                        addErrorToHistory(this.state, `Setup EM-${em.id} merge failed: ${result.error}`, undefined);
                     }
                 }
             }
@@ -736,29 +823,63 @@ Implement this task now.`;
             this.state.pendingEMs = [];
             this.state.phase = 'em_assignment';
             await saveState(this.state, `chore: setup complete, adding ${this.state.ems.length - 1} implementation EMs`);
+            await this.updateProgressComment();
             // Start the next EM
             await this.startNextEM();
             return;
         }
-        // Merge all EM PRs
+        // Merge all EM PRs (wait for reviews on each)
         console.log('\n=== Merging EM PRs ===');
         for (const em of this.state.ems) {
             if (em.prNumber && (em.status === 'pr_created' || em.status === 'approved')) {
-                const result = await this.github.mergePullRequest(em.prNumber);
+                // Wait for reviews before merging
+                try {
+                    await this.waitForReviewsBeforeMerge(em.prNumber, em.completedAt);
+                }
+                catch (err) {
+                    console.log(`  Skipping review wait for EM-${em.id}: ${err.message}`);
+                }
+                let result = await this.github.mergePullRequest(em.prNumber);
+                // If base branch was modified, try to update and retry
+                if (!result.merged && result.error?.includes('Base branch modified')) {
+                    console.log(`  Updating EM-${em.id} PR #${em.prNumber} branch...`);
+                    const updated = await this.github.updatePullRequestBranch(em.prNumber);
+                    if (updated) {
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                        result = await this.github.mergePullRequest(em.prNumber);
+                    }
+                }
                 if (result.merged) {
                     em.status = 'merged';
                     console.log(`Merged EM-${em.id} PR #${em.prNumber}${result.alreadyMerged ? ' (was already merged)' : ''}`);
                 }
                 else {
-                    console.warn(`Could not merge EM-${em.id} PR #${em.prNumber}: ${result.error}`);
+                    const reason = result.error || 'Unknown';
+                    console.warn(`Could not merge EM-${em.id} PR #${em.prNumber}: ${reason}`);
+                    em.status = 'failed';
+                    em.error = reason;
+                    addErrorToHistory(this.state, `EM-${em.id} merge failed: ${reason}`, `PR #${em.prNumber}`);
                 }
             }
+        }
+        // Check if we have at least one successfully merged EM
+        const mergedEMs = this.state.ems.filter(em => em.status === 'merged');
+        if (mergedEMs.length === 0) {
+            const reason = 'No EMs merged - all skipped or failed';
+            console.error(reason);
+            addErrorToHistory(this.state, reason, `EMs status: ${this.state.ems.map(e => `EM${e.id}:${e.status}`).join(', ')}`);
+            this.state.phase = 'failed';
+            this.state.error = reason;
+            await saveState(this.state);
+            await this.updateProgressComment(reason);
+            return;
         }
         // Pull latest work branch
         await GitOperations.checkout(this.state.workBranch);
         await GitOperations.pull(this.state.workBranch);
         this.state.phase = 'final_merge';
         await saveState(this.state);
+        await this.updateProgressComment();
         // Create final PR to main
         await this.createFinalPR();
     }
@@ -1195,8 +1316,70 @@ ${reviewBody}
                 console.log('Orchestration already complete');
                 break;
             case 'failed':
-                console.log('Orchestration failed, manual intervention needed');
+                // Try to recover from failed state
+                await this.attemptRecovery();
                 break;
+        }
+    }
+    /**
+     * Attempt to recover from failed state
+     * Looks at what work was done and tries to continue from there
+     */
+    async attemptRecovery() {
+        if (!this.state)
+            return;
+        console.log('\n=== Attempting recovery from failed state ===');
+        console.log(`Last error: ${this.state.error}`);
+        // Check if we have EMs that need work
+        const pendingEMs = this.state.ems.filter(em => em.status === 'pending' || em.status === 'workers_running');
+        const emsWithPendingPRs = this.state.ems.filter(em => em.status === 'pr_created' || em.status === 'approved');
+        const allWorkersComplete = this.state.ems.every(em => areAllWorkersComplete(em));
+        // Determine best recovery action
+        if (pendingEMs.length > 0) {
+            // There are EMs that haven't finished - continue worker execution
+            console.log(`Found ${pendingEMs.length} EMs with pending work. Resuming worker execution.`);
+            this.state.phase = 'worker_execution';
+            this.state.error = undefined;
+            addErrorToHistory(this.state, 'Recovered from failed state - resuming worker execution', undefined);
+            await saveState(this.state);
+            await this.updateProgressComment();
+            await this.continueWorkerExecution();
+        }
+        else if (emsWithPendingPRs.length > 0) {
+            // Workers done, but EM PRs haven't merged - try to merge them
+            console.log(`Found ${emsWithPendingPRs.length} EM PRs to merge. Resuming EM merging.`);
+            this.state.phase = 'em_merging';
+            this.state.error = undefined;
+            addErrorToHistory(this.state, 'Recovered from failed state - resuming EM merging', undefined);
+            await saveState(this.state);
+            await this.updateProgressComment();
+            await this.checkFinalMerge();
+        }
+        else if (allWorkersComplete && !this.state.finalPr) {
+            // All work done but no final PR - create it
+            console.log('All EMs complete but no final PR. Creating final PR.');
+            this.state.phase = 'final_merge';
+            this.state.error = undefined;
+            addErrorToHistory(this.state, 'Recovered from failed state - creating final PR', undefined);
+            await saveState(this.state);
+            await this.updateProgressComment();
+            await this.createFinalPR();
+        }
+        else if (this.state.finalPr) {
+            // Final PR exists - check if it needs review handling
+            console.log(`Final PR #${this.state.finalPr.number} exists. Checking review status.`);
+            this.state.phase = 'final_review';
+            this.state.error = undefined;
+            addErrorToHistory(this.state, 'Recovered from failed state - resuming final PR review', undefined);
+            await saveState(this.state);
+            await this.updateProgressComment();
+        }
+        else {
+            // No clear recovery path - start fresh analysis
+            console.log('No clear recovery path. Consider restarting from analysis.');
+            addErrorToHistory(this.state, 'Recovery failed - no clear path forward', `EMs: ${this.state.ems.map(e => `${e.id}:${e.status}`).join(', ')}`);
+            await saveState(this.state);
+            await this.updateProgressComment('Recovery failed. Manual intervention may be needed.');
         }
     }
     /**
