@@ -88,6 +88,100 @@ export class EventDrivenOrchestrator {
   }
 
   /**
+   * Post or update progress comment on the issue
+   */
+  private async updateProgressComment(error?: string): Promise<void> {
+    if (!this.state) return;
+
+    const { issue, ems, phase, workBranch, finalPr } = this.state;
+    
+    // Build status emoji based on phase
+    const phaseEmoji: Record<string, string> = {
+      initialized: '🚀',
+      analyzing: '🔍',
+      project_setup: '📦',
+      em_assignment: '👥',
+      worker_execution: '⚙️',
+      worker_review: '👀',
+      em_merging: '🔀',
+      em_review: '📝',
+      final_merge: '✅',
+      final_review: '🎯',
+      complete: '🎉',
+      failed: '❌'
+    };
+
+    const statusEmoji = phaseEmoji[phase] || '📋';
+    const phaseLabel = phase.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+
+    // Build EM/Worker status table
+    let emTable = '';
+    if (ems.length > 0) {
+      emTable = `\n### Teams & Workers\n\n| Team | Focus | Workers | Status |\n|------|-------|---------|--------|\n`;
+      
+      for (const em of ems) {
+        const completedWorkers = em.workers.filter(w => w.status === 'merged').length;
+        const totalWorkers = em.workers.length;
+        const workerStatus = totalWorkers > 0 ? `${completedWorkers}/${totalWorkers}` : 'Pending';
+        
+        let emStatusDisplay = em.status as string;
+        if (em.status === 'merged') emStatusDisplay = '✅ Merged';
+        else if (em.status === 'pr_created') emStatusDisplay = '🔄 PR Open';
+        else if (em.status === 'workers_running') emStatusDisplay = '⚙️ Working';
+        else if (em.status === 'workers_complete') emStatusDisplay = '📝 Workers Done';
+        else if (em.status === 'pending') emStatusDisplay = '⏳ Pending';
+        
+        emTable += `| EM-${em.id} | ${em.focusArea.substring(0, 30)}${em.focusArea.length > 30 ? '...' : ''} | ${workerStatus} | ${emStatusDisplay} |\n`;
+      }
+
+      // Add worker details for active EM
+      const activeEM = ems.find(em => em.status === 'workers_running' || em.status === 'workers_complete');
+      if (activeEM && activeEM.workers.length > 0) {
+        emTable += `\n<details><summary>Worker Details for EM-${activeEM.id}</summary>\n\n`;
+        emTable += `| Worker | Task | Status |\n|--------|------|--------|\n`;
+        for (const worker of activeEM.workers) {
+          let wStatusDisplay = worker.status as string;
+          if (worker.status === 'merged') wStatusDisplay = '✅';
+          else if (worker.status === 'pr_created') wStatusDisplay = '🔄 PR #' + (worker.prNumber || '');
+          else if (worker.status === 'in_progress') wStatusDisplay = '⚙️';
+          else wStatusDisplay = '⏳';
+          
+          emTable += `| W-${worker.id} | ${worker.task.substring(0, 40)}${worker.task.length > 40 ? '...' : ''} | ${wStatusDisplay} |\n`;
+        }
+        emTable += `\n</details>\n`;
+      }
+    }
+
+    // Build error section if there's an error
+    const errorSection = error 
+      ? `\n### ⚠️ Error\n\`\`\`\n${error.substring(0, 500)}${error.length > 500 ? '...' : ''}\n\`\`\`\n`
+      : '';
+
+    // Build final PR section
+    const finalPRSection = finalPr 
+      ? `\n### Final PR\n[#${finalPr.number}](${finalPr.url}) - Reviews addressed: ${finalPr.reviewsAddressed || 0}\n`
+      : '';
+
+    // Build the full comment
+    const body = `## 🤖 Orchestration Status
+
+${statusEmoji} **Phase:** ${phaseLabel}
+
+**Branch:** \`${workBranch}\`
+**EMs:** ${ems.length} | **Workers:** ${ems.reduce((sum, em) => sum + em.workers.length, 0)}
+${emTable}${finalPRSection}${errorSection}
+---
+*Last updated: ${new Date().toISOString()}*
+*Automated by [Claude Code Orchestrator](https://github.com/mohsen1/claude-orchestrator-action)*`;
+
+    try {
+      await this.github.updateIssueComment(issue.number, body);
+    } catch (err) {
+      console.error('Failed to update progress comment:', err);
+    }
+  }
+
+  /**
    * Main entry point - handle an event
    */
   async handleEvent(event: OrchestratorEvent): Promise<void> {
@@ -131,6 +225,7 @@ export class EventDrivenOrchestrator {
         this.state.phase = 'failed';
         this.state.error = (error as Error).message;
         await saveState(this.state);
+        await this.updateProgressComment((error as Error).message);
       }
       throw error;
     }
@@ -184,6 +279,7 @@ export class EventDrivenOrchestrator {
     console.log('\n=== Phase: Director Analysis ===');
     this.state.phase = 'analyzing';
     await saveState(this.state);
+    await this.updateProgressComment();
 
     const { maxEms, maxWorkersPerEm } = this.state.config;
 
@@ -268,6 +364,7 @@ ${this.state.issue.body}
       // Run setup phase first
       this.state.projectSetup = { completed: false };
       this.state.phase = 'project_setup';
+      await this.updateProgressComment();
 
       // Create setup EM state
       this.state.ems = [{
@@ -312,6 +409,7 @@ ${this.state.issue.body}
 
       this.state.phase = 'em_assignment';
       await saveState(this.state, `chore: director assigned ${this.state.ems.length} EMs`);
+      await this.updateProgressComment();
 
       // Start first EM
       await this.startNextEM();
@@ -354,6 +452,7 @@ ${this.state.issue.body}
     pendingEM.status = 'workers_running';
     this.state.phase = 'worker_execution';
     await saveState(this.state, `chore: EM-${pendingEM.id} assigned ${workerTasks.length} workers`);
+    await this.updateProgressComment();
 
     // Start first worker
     await this.startNextWorker(pendingEM);
@@ -518,6 +617,7 @@ Implement this task now - code only, no documentation files.`;
 
     this.state.phase = 'worker_review';
     await saveState(this.state, `chore: Worker-${pendingWorker.id} PR created (#${pr.number})`);
+    await this.updateProgressComment();
 
     console.log(`Worker-${pendingWorker.id} PR created: ${pr.html_url}`);
 
@@ -601,6 +701,7 @@ Implement this task now - code only, no documentation files.`;
 
     this.state.phase = 'em_review';
     await saveState(this.state, `chore: EM-${em.id} PR processed`);
+    await this.updateProgressComment();
 
     // Start next EM if any
     await this.startNextEM();
@@ -724,6 +825,7 @@ Closes #${this.state.issue.number}
     
     // Save state but don't commit - we'll remove the state file from the PR
     await saveState(this.state);
+    await this.updateProgressComment();
 
     // Remove state file from work branch (it shouldn't be in the final PR)
     console.log('Removing orchestrator state file from work branch...');

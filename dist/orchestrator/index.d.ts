@@ -41,6 +41,10 @@ export declare class EventDrivenOrchestrator {
     private state;
     constructor(ctx: OrchestratorContext);
     /**
+     * Post or update progress comment on the issue
+     */
+    private updateProgressComment;
+    /**
      * Main entry point - handle an event
      */
     handleEvent(event: OrchestratorEvent): Promise<void>;
