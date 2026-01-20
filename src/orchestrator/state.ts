@@ -104,6 +104,9 @@ export interface OrchestratorState {
   // EM and Worker states
   ems: EMState[];
   
+  // Pending EMs to add after setup phase completes
+  pendingEMs?: EMState[];
+  
   // Final PR info
   finalPr?: {
     number: number;

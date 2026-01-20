@@ -277,8 +277,8 @@ ${this.state.issue.body}
         startedAt: new Date().toISOString()
       }];
 
-      // Store other EMs for later
-      const pendingEMs = otherEMs.slice(0, maxEms).map((em, idx) => ({
+      // Store other EMs in state for later (after setup completes)
+      this.state.pendingEMs = otherEMs.slice(0, maxEms).map((em, idx) => ({
         id: idx + 1,
         task: em.task,
         focusArea: em.focus_area,
@@ -288,16 +288,11 @@ ${this.state.issue.body}
         reviewsAddressed: 0
       }));
 
-      await saveState(this.state, `chore: director starting project setup first`);
+      console.log(`Project setup needed. ${this.state.pendingEMs.length} EMs queued after setup.`);
+      await saveState(this.state, `chore: director starting project setup first (${this.state.pendingEMs.length} EMs pending)`);
 
-      // Start setup
+      // Start setup EM
       await this.startNextEM();
-
-      // After setup completes, add other EMs
-      // This happens in checkFinalMerge when setup EM is done
-      if (pendingEMs.length > 0) {
-        this.state.ems.push(...pendingEMs);
-      }
     } else {
       // No setup needed, proceed normally
       this.state.ems = otherEMs.slice(0, maxEms).map((em, idx) => ({
@@ -580,13 +575,40 @@ Implement this task now - code only, no documentation files.`;
   private async checkFinalMerge(): Promise<void> {
     if (!this.state) throw new Error('No state');
 
-    // Check if all EMs have PRs created or merged
+    // Check if all current EMs have PRs created or merged
     const allEMsReady = this.state.ems.every(em => 
       em.status === 'pr_created' || em.status === 'approved' || em.status === 'merged'
     );
 
     if (!allEMsReady) {
       console.log('Not all EMs are ready for final merge yet');
+      return;
+    }
+
+    // If there are pending EMs (from setup phase), add them now and continue
+    if (this.state.pendingEMs && this.state.pendingEMs.length > 0) {
+      console.log(`\n=== Adding ${this.state.pendingEMs.length} pending EMs after setup ===`);
+      
+      // Merge setup EM first
+      for (const em of this.state.ems) {
+        if (em.prNumber && (em.status === 'pr_created' || em.status === 'approved')) {
+          const result = await this.github.mergePullRequest(em.prNumber);
+          if (result.merged) {
+            em.status = 'merged';
+            console.log(`Merged setup EM-${em.id} PR #${em.prNumber}`);
+          }
+        }
+      }
+      
+      // Add pending EMs to the active list
+      this.state.ems.push(...this.state.pendingEMs);
+      this.state.pendingEMs = [];
+      this.state.phase = 'em_assignment';
+      
+      await saveState(this.state, `chore: setup complete, adding ${this.state.ems.length - 1} implementation EMs`);
+      
+      // Start the next EM
+      await this.startNextEM();
       return;
     }
 

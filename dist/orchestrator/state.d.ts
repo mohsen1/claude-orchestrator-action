@@ -59,6 +59,7 @@ export interface OrchestratorState {
     baseBranch: string;
     projectSetup?: ProjectSetup;
     ems: EMState[];
+    pendingEMs?: EMState[];
     finalPr?: {
         number: number;
         url: string;
