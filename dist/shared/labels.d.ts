@@ -16,6 +16,11 @@
  * This is more reliable than searching for visible text which could be edited
  */
 export declare const ORCHESTRATOR_COMMENT_MARKER = "<!-- cco-orchestrator-comment -->";
+/**
+ * Hidden HTML comment marker used in automated review replies/comments
+ * to allow robust deduplication of already-addressed feedback.
+ */
+export declare const ORCHESTRATOR_REVIEW_MARKER = "<!-- cco-review-addressed -->";
 export declare const BASE_LABEL = "cco-managed";
 export declare const STATUS_LABELS: {
     readonly WORKING: "cco-status-working";

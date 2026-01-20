@@ -178,6 +178,31 @@ export declare class EventDrivenOrchestrator {
      */
     private handlePRMerged;
     /**
+     * Find the state node (worker/em) that owns a PR so we can store dedupe metadata.
+     */
+    private getOrInitReviewTrackingForPR;
+    /**
+     * Return the set of unaddressed ROOT inline review comments on a PR.
+     * A root comment is considered addressed if:
+     * - it has a reply containing ORCHESTRATOR_REVIEW_MARKER, OR
+     * - it is present in addressedReviewCommentIds in state.
+     */
+    private getUnaddressedRootReviewCommentIds;
+    /**
+     * Determine whether a PR is ready to merge based on review state and unaddressed comments.
+     * We intentionally do NOT require \"APPROVED\" to support Copilot COMMENTED reviews.
+     */
+    private isPRReadyToMerge;
+    /**
+     * Attempt to merge a PR if it is review-clean.
+     */
+    private maybeAutoMergePR;
+    /**
+     * Sync global phase for review/merge work once execution has produced PRs.
+     * In practice, project_setup should transition to worker_review once all setup workers are done.
+     */
+    private syncPhaseForReviewIfReady;
+    /**
      * Proactively check for reviews on all PRs and address them
      */
     private checkAndAddressReviews;

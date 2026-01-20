@@ -158,10 +158,12 @@ jobs:
     name: Handle Event
     runs-on: ubuntu-latest
     concurrency:
-      # Prevent multiple handlers for same issue/EM/worker from running simultaneously
-      # But allow different issues/EMs/workers to run in parallel
-      group: cco-${{ inputs.issue_number || 'none' }}-${{ inputs.em_id || 'main' }}-${{ inputs.worker_id || 'main' }}
-      cancel-in-progress: false
+      # Concurrency strategy:
+      # - Partition by event_type + pr_number to avoid review-handler thrash across PRs
+      # - Partition by issue/em/worker for internal dispatch events
+      # - For pull_request_review events, always run the latest and cancel older runs
+      group: cco-${{ inputs.event_type || 'unknown' }}-${{ inputs.issue_number || 'none' }}-${{ inputs.pr_number || 'none' }}-${{ inputs.em_id || 'main' }}-${{ inputs.worker_id || 'main' }}
+      cancel-in-progress: ${{ inputs.event_type == 'pull_request_review' }}
     steps:
       - name: Checkout orchestrator
         uses: actions/checkout@v4

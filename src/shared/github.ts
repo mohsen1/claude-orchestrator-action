@@ -772,6 +772,7 @@ export class GitHubClient {
     body: string;
     path: string;
     line: number | null;
+    inReplyToId: number | null;
     createdAt: string;
   }>> {
     try {
@@ -787,6 +788,7 @@ export class GitHubClient {
         body: comment.body,
         path: comment.path,
         line: comment.line || null,
+        inReplyToId: (comment as any).in_reply_to_id ?? null,
         createdAt: comment.created_at
       }));
     } catch (error) {

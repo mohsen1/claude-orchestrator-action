@@ -32,7 +32,8 @@ import {
   STATUS_LABELS,
   TYPE_LABELS,
   phaseToLabel,
-  ORCHESTRATOR_COMMENT_MARKER
+  ORCHESTRATOR_COMMENT_MARKER,
+  ORCHESTRATOR_REVIEW_MARKER
 } from '../shared/labels.js';
 import { debugLog } from '../shared/debug-log.js';
 
@@ -365,6 +366,10 @@ export class EventDrivenOrchestrator {
         else if (em.status === 'pr_created') emStatusDisplay = '🔄 PR #' + (em.prNumber || '');
         else if (em.status === 'workers_running') emStatusDisplay = '⚙️ Working';
         else if (em.status === 'workers_complete') emStatusDisplay = '📝 Workers Done';
+        else if (em.status === 'approved') emStatusDisplay = '✅ Approved';
+        else if (em.status === 'changes_requested') emStatusDisplay = '📝 Changes Requested';
+        else if (em.status === 'skipped') emStatusDisplay = '⏭️ Skipped';
+        else if (em.status === 'failed') emStatusDisplay = '❌ Failed';
         else if (em.status === 'pending') emStatusDisplay = '⏳ Pending';
         
         emTable += `| EM-${em.id} | ${em.focusArea.substring(0, 30)}${em.focusArea.length > 30 ? '...' : ''} | ${workerStatus} | ${emStatusDisplay} |\n`;
@@ -380,6 +385,9 @@ export class EventDrivenOrchestrator {
           else if (worker.status === 'pr_created') wStatusDisplay = `🔄 [PR #${worker.prNumber}](${worker.prUrl})`;
           else if (worker.status === 'in_progress') wStatusDisplay = '⚙️ Working';
           else if (worker.status === 'changes_requested') wStatusDisplay = '📝 Changes Requested';
+          else if (worker.status === 'approved') wStatusDisplay = '✅ Approved';
+          else if (worker.status === 'skipped') wStatusDisplay = '⏭️ Skipped';
+          else if (worker.status === 'failed') wStatusDisplay = '❌ Failed';
           else wStatusDisplay = '⏳ Pending';
           
           emTable += `| W-${worker.id} | ${worker.task.substring(0, 40)}${worker.task.length > 40 ? '...' : ''} | ${wStatusDisplay} |\n`;
@@ -841,6 +849,7 @@ ${emTable}${finalPRSection}${errorSection}
       await this.github.setPRLabels(pr.number, 'cco-type-worker', 'cco-status-awaiting-review', em.id);
 
       await saveState(this.state, `chore: Worker-${worker.id} created PR #${pr.number}`);
+      await this.syncPhaseForReviewIfReady();
       await this.updateProgressComment();
 
       console.log(`Worker-${worker.id} completed - PR #${pr.number} created. Handler exiting.`);
@@ -860,6 +869,7 @@ ${emTable}${finalPRSection}${errorSection}
       }
       
       await saveState(this.state);
+      await this.syncPhaseForReviewIfReady();
       await this.updateProgressComment();
       
       // Don't throw for skipped workers - let orchestration continue
@@ -2356,6 +2366,144 @@ Closes #${this.state.issue.number}
   }
 
   /**
+   * Find the state node (worker/em) that owns a PR so we can store dedupe metadata.
+   */
+  private getOrInitReviewTrackingForPR(prNumber: number): {
+    addressedReviewCommentIds: number[];
+    addressedIssueCommentIds: number[];
+  } | null {
+    if (!this.state) return null;
+
+    for (const em of this.state.ems) {
+      for (const worker of em.workers) {
+        if (worker.prNumber === prNumber) {
+          worker.addressedReviewCommentIds = worker.addressedReviewCommentIds || [];
+          worker.addressedIssueCommentIds = worker.addressedIssueCommentIds || [];
+          return {
+            addressedReviewCommentIds: worker.addressedReviewCommentIds,
+            addressedIssueCommentIds: worker.addressedIssueCommentIds
+          };
+        }
+      }
+
+      if (em.prNumber === prNumber) {
+        em.addressedReviewCommentIds = em.addressedReviewCommentIds || [];
+        em.addressedIssueCommentIds = em.addressedIssueCommentIds || [];
+        return {
+          addressedReviewCommentIds: em.addressedReviewCommentIds,
+          addressedIssueCommentIds: em.addressedIssueCommentIds
+        };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Return the set of unaddressed ROOT inline review comments on a PR.
+   * A root comment is considered addressed if:
+   * - it has a reply containing ORCHESTRATOR_REVIEW_MARKER, OR
+   * - it is present in addressedReviewCommentIds in state.
+   */
+  private async getUnaddressedRootReviewCommentIds(prNumber: number): Promise<number[]> {
+    const tracking = this.getOrInitReviewTrackingForPR(prNumber);
+    const addressed = new Set<number>(tracking?.addressedReviewCommentIds || []);
+
+    const comments = await this.github.getPullRequestComments(prNumber);
+
+    const repliesByRootId = new Map<number, Array<typeof comments[number]>>();
+    for (const c of comments) {
+      if (c.inReplyToId) {
+        const list = repliesByRootId.get(c.inReplyToId) || [];
+        list.push(c);
+        repliesByRootId.set(c.inReplyToId, list);
+      }
+    }
+
+    const rootComments = comments.filter(c => !c.inReplyToId);
+    const unaddressed: number[] = [];
+
+    for (const root of rootComments) {
+      if (root.user === 'github-actions[bot]') continue;
+      if (root.body.includes(ORCHESTRATOR_REVIEW_MARKER)) continue;
+      if (addressed.has(root.id)) continue;
+
+      const replies = repliesByRootId.get(root.id) || [];
+      const hasAddressedReply = replies.some(r => r.body.includes(ORCHESTRATOR_REVIEW_MARKER));
+      if (hasAddressedReply) {
+        // Backfill state so future runs can skip even without scanning replies
+        tracking?.addressedReviewCommentIds.push(root.id);
+        addressed.add(root.id);
+        continue;
+      }
+
+      unaddressed.push(root.id);
+    }
+
+    return unaddressed;
+  }
+
+  /**
+   * Determine whether a PR is ready to merge based on review state and unaddressed comments.
+   * We intentionally do NOT require \"APPROVED\" to support Copilot COMMENTED reviews.
+   */
+  private async isPRReadyToMerge(prNumber: number): Promise<boolean> {
+    const reviews = await this.github.getPullRequestReviews(prNumber);
+    if (reviews.some(r => r.state === 'CHANGES_REQUESTED')) {
+      return false;
+    }
+
+    const unaddressed = await this.getUnaddressedRootReviewCommentIds(prNumber);
+    return unaddressed.length === 0;
+  }
+
+  /**
+   * Attempt to merge a PR if it is review-clean.
+   */
+  private async maybeAutoMergePR(prNumber: number): Promise<void> {
+    try {
+      const ready = await this.isPRReadyToMerge(prNumber);
+      if (!ready) return;
+
+      await this.github.setStatusLabel(prNumber, STATUS_LABELS.READY_TO_MERGE);
+
+      // Try merge (may fail due to checks/permissions/branch protection)
+      const result = await this.github.mergePullRequest(prNumber);
+      if (result.merged) {
+        await this.github.setStatusLabel(prNumber, STATUS_LABELS.MERGED);
+      } else if (result.error) {
+        console.warn(`PR #${prNumber} not merged: ${result.error}`);
+        // Keep as awaiting review so future events can retry
+        await this.github.setStatusLabel(prNumber, STATUS_LABELS.AWAITING_REVIEW);
+      }
+    } catch (err) {
+      console.warn(`Auto-merge attempt failed for PR #${prNumber}: ${(err as Error).message}`);
+      // Do not throw from auto-merge; it's best-effort
+    }
+  }
+
+  /**
+   * Sync global phase for review/merge work once execution has produced PRs.
+   * In practice, project_setup should transition to worker_review once all setup workers are done.
+   */
+  private async syncPhaseForReviewIfReady(): Promise<void> {
+    if (!this.state) return;
+
+    const anyWorkerRunning = this.state.ems.some(em =>
+      em.workers.some(w => w.status === 'pending' || w.status === 'in_progress')
+    );
+    const anyWorkerAwaitingReview = this.state.ems.some(em =>
+      em.workers.some(w => w.status === 'pr_created' || w.status === 'changes_requested' || w.status === 'approved')
+    );
+
+    if (!anyWorkerRunning && anyWorkerAwaitingReview && this.state.phase !== 'worker_review') {
+      await this.setPhase('worker_review');
+      await saveState(this.state, 'chore: transition to worker_review');
+      await this.updateProgressComment();
+    }
+  }
+
+  /**
    * Proactively check for reviews on all PRs and address them
    */
   private async checkAndAddressReviews(): Promise<void> {
@@ -2367,21 +2515,25 @@ Closes #${this.state.issue.number}
         if (worker.prNumber && worker.status === 'pr_created') {
           try {
             const reviews = await this.github.getPullRequestReviews(worker.prNumber);
-            const comments = await this.github.getPullRequestComments(worker.prNumber);
-            
-            const hasActionableReview = reviews.some(r => 
-              r.state === 'CHANGES_REQUESTED' || 
-              (r.state === 'COMMENTED' && r.body && r.body.length > 20)
-            ) || comments.length > 0;
+            const hasChangesRequested = reviews.some(r => r.state === 'CHANGES_REQUESTED');
+            const unaddressed = await this.getUnaddressedRootReviewCommentIds(worker.prNumber);
 
-            if (hasActionableReview) {
+            if (hasChangesRequested || unaddressed.length > 0) {
               console.log(`Worker-${worker.id} PR #${worker.prNumber} has reviews - addressing`);
               await this.github.setStatusLabel(worker.prNumber, STATUS_LABELS.ADDRESSING_FEEDBACK);
-              await this.addressReview(worker.branch, worker.prNumber, '');
-              worker.reviewsAddressed++;
-              await this.github.setStatusLabel(worker.prNumber, STATUS_LABELS.AWAITING_REVIEW);
+              try {
+                await this.addressReview(worker.branch, worker.prNumber, '');
+                worker.reviewsAddressed++;
+              } finally {
+                await this.github.setStatusLabel(worker.prNumber, STATUS_LABELS.AWAITING_REVIEW);
+              }
+
               await saveState(this.state);
+              await this.updateProgressComment();
             }
+
+            // If review is clean, try merging
+            await this.maybeAutoMergePR(worker.prNumber);
           } catch (err) {
             console.log(`Could not check reviews for Worker-${worker.id} PR: ${(err as Error).message}`);
           }
@@ -2392,26 +2544,30 @@ Closes #${this.state.issue.number}
       if (em.prNumber && em.status === 'pr_created') {
         try {
           const reviews = await this.github.getPullRequestReviews(em.prNumber);
-          const comments = await this.github.getPullRequestComments(em.prNumber);
-          
-          const hasActionableReview = reviews.some(r => 
-            r.state === 'CHANGES_REQUESTED' || 
-            (r.state === 'COMMENTED' && r.body && r.body.length > 20)
-          ) || comments.length > 0;
+          const hasChangesRequested = reviews.some(r => r.state === 'CHANGES_REQUESTED');
+          const unaddressed = await this.getUnaddressedRootReviewCommentIds(em.prNumber);
 
-          if (hasActionableReview) {
+          if (hasChangesRequested || unaddressed.length > 0) {
             console.log(`EM-${em.id} PR #${em.prNumber} has reviews - addressing`);
             await this.github.setStatusLabel(em.prNumber, STATUS_LABELS.ADDRESSING_FEEDBACK);
-            await this.addressReview(em.branch, em.prNumber, '');
-            em.reviewsAddressed++;
-            await this.github.setStatusLabel(em.prNumber, STATUS_LABELS.AWAITING_REVIEW);
+            try {
+              await this.addressReview(em.branch, em.prNumber, '');
+              em.reviewsAddressed++;
+            } finally {
+              await this.github.setStatusLabel(em.prNumber, STATUS_LABELS.AWAITING_REVIEW);
+            }
             await saveState(this.state);
+            await this.updateProgressComment();
           }
+
+          await this.maybeAutoMergePR(em.prNumber);
         } catch (err) {
           console.log(`Could not check reviews for EM-${em.id} PR: ${(err as Error).message}`);
         }
       }
     }
+
+    await this.syncPhaseForReviewIfReady();
   }
 
   /**
@@ -2476,13 +2632,24 @@ Closes #${this.state.issue.number}
           console.log(`Addressing review on Worker-${worker.id} PR`);
           // Set status to addressing feedback while working
           await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.ADDRESSING_FEEDBACK);
-          await this.addressReview(worker.branch, event.prNumber, reviewBody);
+          try {
+            await this.addressReview(worker.branch, event.prNumber, reviewBody);
           worker.reviewsAddressed++;
           worker.status = 'pr_created';
-          // Set back to awaiting review after addressing
-          await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.AWAITING_REVIEW);
+          } finally {
+            // Set back to awaiting review after addressing
+            await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.AWAITING_REVIEW);
+          }
+
           await saveState(this.state);
+          await this.syncPhaseForReviewIfReady();
           await this.updateProgressComment();
+
+          // If review is now clean, try merging
+          await this.maybeAutoMergePR(event.prNumber);
+
+          // Also proactively handle reviews on other PRs for this issue
+          await this.checkAndAddressReviews();
           return;
         }
       }
@@ -2491,13 +2658,21 @@ Closes #${this.state.issue.number}
         console.log(`Addressing review on EM-${em.id} PR`);
         // Set status to addressing feedback while working
         await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.ADDRESSING_FEEDBACK);
-        await this.addressReview(em.branch, event.prNumber, reviewBody);
+        try {
+          await this.addressReview(em.branch, event.prNumber, reviewBody);
         em.reviewsAddressed++;
         em.status = 'pr_created';
-        // Set back to awaiting review after addressing
-        await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.AWAITING_REVIEW);
+        } finally {
+          // Set back to awaiting review after addressing
+          await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.AWAITING_REVIEW);
+        }
         await saveState(this.state);
+        await this.syncPhaseForReviewIfReady();
         await this.updateProgressComment();
+
+        await this.maybeAutoMergePR(event.prNumber);
+
+        await this.checkAndAddressReviews();
         return;
       }
     }
@@ -2514,23 +2689,69 @@ Closes #${this.state.issue.number}
     
     // Get general PR comments (issue-style comments)
     const prComments = await this.github.getPullRequestIssueComments(prNumber);
+
+    // Resolve which state node owns this PR so we can dedupe review handling
+    let addressedReviewCommentIds: number[] = [];
+    let addressedIssueCommentIds: number[] = [];
+    if (this.state) {
+      for (const em of this.state.ems) {
+        for (const worker of em.workers) {
+          if (worker.prNumber === prNumber) {
+            worker.addressedReviewCommentIds = worker.addressedReviewCommentIds || [];
+            worker.addressedIssueCommentIds = worker.addressedIssueCommentIds || [];
+            addressedReviewCommentIds = worker.addressedReviewCommentIds;
+            addressedIssueCommentIds = worker.addressedIssueCommentIds;
+          }
+        }
+        if (em.prNumber === prNumber) {
+          em.addressedReviewCommentIds = em.addressedReviewCommentIds || [];
+          em.addressedIssueCommentIds = em.addressedIssueCommentIds || [];
+          addressedReviewCommentIds = em.addressedReviewCommentIds;
+          addressedIssueCommentIds = em.addressedIssueCommentIds;
+        }
+      }
+    }
+
+    const addressedReviewSet = new Set<number>(addressedReviewCommentIds);
+    const addressedIssueSet = new Set<number>(addressedIssueCommentIds);
+
+    const markReviewAddressed = (id: number) => {
+      if (addressedReviewSet.has(id)) return;
+      addressedReviewSet.add(id);
+      addressedReviewCommentIds.push(id);
+    };
+
+    const markIssueAddressed = (id: number) => {
+      if (addressedIssueSet.has(id)) return;
+      addressedIssueSet.add(id);
+      addressedIssueCommentIds.push(id);
+    };
     
     // Process inline comments individually
     if (reviewComments.length > 0) {
       console.log(`Processing ${reviewComments.length} inline code comments...`);
-      await this.processInlineComments(prNumber, reviewComments, branch);
+      await this.processInlineComments(prNumber, reviewComments, branch, {
+        isAlreadyAddressed: (rootId) => addressedReviewSet.has(rootId),
+        markAddressed: markReviewAddressed
+      });
     }
 
     // Process general PR comments
     const actionableComments = prComments.filter(c => 
       c.user !== 'github-actions[bot]' && 
       !c.body.includes('Automated by Claude') &&
+      !c.body.includes('_Automated response_') &&
+      !c.body.includes(ORCHESTRATOR_REVIEW_MARKER) &&
+      !addressedIssueSet.has(c.id) &&
       c.body.length > 10
     );
     
     if (actionableComments.length > 0) {
       console.log(`Processing ${actionableComments.length} general PR comments...`);
-      await this.processGeneralPRComments(prNumber, actionableComments, branch);
+      await this.processGeneralPRComments(prNumber, actionableComments, branch, {
+        isAlreadyAddressed: (commentId) => addressedIssueSet.has(commentId),
+        markAddressed: markIssueAddressed
+      });
     }
 
     // If there's also a review body, address it
@@ -2555,9 +2776,19 @@ Closes #${this.state.issue.number}
   private async processGeneralPRComments(
     prNumber: number,
     comments: Array<{ id: number; user: string; body: string; createdAt: string }>,
-    _branch: string
+    _branch: string,
+    opts?: {
+      isAlreadyAddressed?: (commentId: number) => boolean;
+      markAddressed?: (commentId: number) => void;
+    }
   ): Promise<void> {
     for (const comment of comments) {
+      // Skip bot comments and orchestrator-authored comments
+      if (comment.user === 'github-actions[bot]') continue;
+      if (comment.body.includes(ORCHESTRATOR_REVIEW_MARKER)) continue;
+      if (comment.body.includes('_Automated response_')) continue;
+      if (opts?.isAlreadyAddressed?.(comment.id)) continue;
+
       console.log(`\n  Processing general comment from ${comment.user}`);
       console.log(`  Comment: "${comment.body.substring(0, 100)}${comment.body.length > 100 ? '...' : ''}"`);
 
@@ -2609,14 +2840,16 @@ Make the changes now. Focus on what the comment is asking for.`;
         
         // Reply to the comment
         await this.github.addPullRequestComment(prNumber, 
-          `Addressed: ${suggestedAction || 'Made the requested changes.'}\n\n_Automated response_`
+          `Addressed feedback from comment ${comment.id}: ${suggestedAction || 'Made the requested changes.'}\n\n${ORCHESTRATOR_REVIEW_MARKER}\n\n_Automated response_`
         );
+        opts?.markAddressed?.(comment.id);
         console.log(`  -> Fixed and replied`);
       } else {
         console.log(`  -> Not actionable: ${reason}`);
         await this.github.addPullRequestComment(prNumber,
-          `Thank you for the feedback. ${reason}\n\n_Automated response_`
+          `Thank you for the feedback on comment ${comment.id}. ${reason}\n\n${ORCHESTRATOR_REVIEW_MARKER}\n\n_Automated response_`
         );
+        opts?.markAddressed?.(comment.id);
       }
     }
   }
@@ -2626,12 +2859,43 @@ Make the changes now. Focus on what the comment is asking for.`;
    */
   private async processInlineComments(
     prNumber: number, 
-    comments: Array<{ id: number; user: string; body: string; path: string; line: number | null; createdAt: string }>,
-    _branch: string
+    comments: Array<{ id: number; user: string; body: string; path: string; line: number | null; inReplyToId: number | null; createdAt: string }>,
+    _branch: string,
+    opts?: {
+      isAlreadyAddressed?: (rootCommentId: number) => boolean;
+      markAddressed?: (rootCommentId: number) => void;
+    }
   ): Promise<void> {
-    for (const comment of comments) {
-      // Skip bot comments or already resolved comments
+    // Build a map of replies per root comment so we can detect already-addressed threads
+    const repliesByRootId = new Map<number, Array<typeof comments[number]>>();
+    for (const c of comments) {
+      if (c.inReplyToId) {
+        const list = repliesByRootId.get(c.inReplyToId) || [];
+        list.push(c);
+        repliesByRootId.set(c.inReplyToId, list);
+      }
+    }
+
+    // Only process ROOT review comments (ignore replies)
+    const rootComments = comments.filter(c => !c.inReplyToId);
+
+    for (const comment of rootComments) {
+      // Skip bot comments and any orchestrator-authored comments
       if (comment.user === 'github-actions[bot]') continue;
+      if (comment.body.includes(ORCHESTRATOR_REVIEW_MARKER)) continue;
+
+      // Skip if we already replied with our marker on this thread
+      const replies = repliesByRootId.get(comment.id) || [];
+      const hasAddressedReply = replies.some(r => r.body.includes(ORCHESTRATOR_REVIEW_MARKER));
+      if (hasAddressedReply) {
+        opts?.markAddressed?.(comment.id);
+        continue;
+      }
+
+      // Skip if state says this root comment is already handled
+      if (opts?.isAlreadyAddressed?.(comment.id)) {
+        continue;
+      }
       
       console.log(`\n  Processing comment on ${comment.path}:${comment.line || 'N/A'}`);
       console.log(`  Comment: "${comment.body.substring(0, 100)}${comment.body.length > 100 ? '...' : ''}"`);
@@ -2704,8 +2968,9 @@ DO NOT create any new files or documentation.`;
         await this.github.replyToReviewComment(
           prNumber, 
           comment.id, 
-          `Fixed! ${suggestedFix || 'Made the requested changes.'}`
+          `Fixed. ${suggestedFix || 'Made the requested changes.'}\n\n${ORCHESTRATOR_REVIEW_MARKER}`
         );
+        opts?.markAddressed?.(comment.id);
         console.log(`  -> Fixed and replied`);
       } else {
         console.log(`  -> Not actionable: ${reason}`);
@@ -2714,8 +2979,9 @@ DO NOT create any new files or documentation.`;
         await this.github.replyToReviewComment(
           prNumber, 
           comment.id, 
-          `Thank you for the feedback. ${reason}\n\nNo code changes were made for this comment.`
+          `Thank you for the feedback. ${reason}\n\nNo code changes were made for this comment.\n\n${ORCHESTRATOR_REVIEW_MARKER}`
         );
+        opts?.markAddressed?.(comment.id);
         console.log(`  -> Replied with explanation`);
       }
     }
@@ -3050,36 +3316,39 @@ ${reviewBody}
     if (!this.state) return;
 
     for (const em of this.state.ems) {
-      // Try to merge approved worker PRs
+      // Try to merge review-clean worker PRs
       for (const worker of em.workers) {
-        if (worker.status === 'approved' && worker.prNumber) {
-          const result = await this.github.mergePullRequest(worker.prNumber);
-          if (result.merged) {
-            worker.status = 'merged';
-          } else {
-            console.warn(`Could not merge worker PR #${worker.prNumber}: ${result.error}`);
-          }
-        }
+        if (!worker.prNumber) continue;
+        if (worker.status !== 'pr_created' && worker.status !== 'approved') continue;
+        await this.maybeAutoMergePR(worker.prNumber);
       }
 
-      // If all workers merged, create EM PR if not exists
+      // If all workers complete (merged/skipped/failed), dispatch EM PR creation if it doesn't exist
       if (areAllWorkersComplete(em) && !em.prNumber) {
-        await this.createEMPullRequest(em);
+        // Event-driven: create EM PR via internal dispatch
+        await this.dispatchEvent('create_em_pr', {
+          issue_number: this.state.issue.number,
+          em_id: em.id
+        });
       }
 
-      // Try to merge approved EM PRs
-      if (em.status === 'approved' && em.prNumber) {
-        const result = await this.github.mergePullRequest(em.prNumber);
-        if (result.merged) {
-          em.status = 'merged';
-        } else {
-          console.warn(`Could not merge EM PR #${em.prNumber}: ${result.error}`);
-        }
+      // Try to merge review-clean EM PRs
+      if (em.prNumber && (em.status === 'pr_created' || em.status === 'approved')) {
+        await this.maybeAutoMergePR(em.prNumber);
       }
     }
 
     await saveState(this.state);
-    await this.checkFinalMerge();
+    await this.syncPhaseForReviewIfReady();
+    await this.updateProgressComment();
+
+    // If all EMs are merged/skipped, dispatch final completion check
+    const allEMsDone = this.state.ems.every(em => em.status === 'merged' || em.status === 'skipped');
+    if (allEMsDone && !this.state.finalPr?.number) {
+      await this.dispatchEvent('check_completion', {
+        issue_number: this.state.issue.number
+      });
+    }
   }
 
   /**

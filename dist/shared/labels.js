@@ -16,6 +16,11 @@
  * This is more reliable than searching for visible text which could be edited
  */
 export const ORCHESTRATOR_COMMENT_MARKER = '<!-- cco-orchestrator-comment -->';
+/**
+ * Hidden HTML comment marker used in automated review replies/comments
+ * to allow robust deduplication of already-addressed feedback.
+ */
+export const ORCHESTRATOR_REVIEW_MARKER = '<!-- cco-review-addressed -->';
 // Base label - all orchestrator PRs get this
 export const BASE_LABEL = 'cco-managed';
 // Status labels - mutually exclusive, one per PR at a time

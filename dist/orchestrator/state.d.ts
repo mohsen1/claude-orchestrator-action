@@ -17,6 +17,15 @@ export interface WorkerState {
     prNumber?: number;
     prUrl?: string;
     reviewsAddressed: number;
+    /**
+     * Review comment IDs (root inline comments) that have been addressed by the orchestrator.
+     * Used for idempotency/deduplication to avoid re-processing the same review threads.
+     */
+    addressedReviewCommentIds?: number[];
+    /**
+     * PR issue comment IDs (general comments) that have been addressed by the orchestrator.
+     */
+    addressedIssueCommentIds?: number[];
     error?: string;
     startedAt?: string;
     completedAt?: string;
@@ -31,6 +40,14 @@ export interface EMState {
     prUrl?: string;
     workers: WorkerState[];
     reviewsAddressed: number;
+    /**
+     * Review comment IDs (root inline comments) that have been addressed on the EM PR.
+     */
+    addressedReviewCommentIds?: number[];
+    /**
+     * PR issue comment IDs (general comments) that have been addressed on the EM PR.
+     */
+    addressedIssueCommentIds?: number[];
     error?: string;
     startedAt?: string;
     completedAt?: string;

@@ -232,6 +232,7 @@ export declare class GitHubClient {
         body: string;
         path: string;
         line: number | null;
+        inReplyToId: number | null;
         createdAt: string;
     }>>;
     /**

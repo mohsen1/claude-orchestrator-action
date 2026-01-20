@@ -636,6 +636,7 @@ export class GitHubClient {
                 body: comment.body,
                 path: comment.path,
                 line: comment.line || null,
+                inReplyToId: comment.in_reply_to_id ?? null,
                 createdAt: comment.created_at
             }));
         }
