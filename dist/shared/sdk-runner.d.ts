@@ -25,12 +25,18 @@ export declare class SDKRunner {
     private workDir;
     constructor(options?: SDKRunnerOptions);
     /**
-     * Execute a task using the Claude Agent SDK
+     * Execute a task using the Claude Agent SDK with retry logic
      */
     executeTask(prompt: string, options?: {
         sessionId?: string;
         allowedTools?: string[];
+        maxRetries?: number;
     }): Promise<SDKTaskResult>;
+    private isNonRetryableError;
+    /**
+     * Single execution attempt
+     */
+    private executeTaskOnce;
     private isRateLimitError;
 }
 //# sourceMappingURL=sdk-runner.d.ts.map

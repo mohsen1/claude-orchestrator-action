@@ -45,9 +45,61 @@ export class SDKRunner {
   }
 
   /**
-   * Execute a task using the Claude Agent SDK
+   * Execute a task using the Claude Agent SDK with retry logic
    */
   async executeTask(prompt: string, options: {
+    sessionId?: string;
+    allowedTools?: string[];
+    maxRetries?: number;
+  } = {}): Promise<SDKTaskResult> {
+    const maxRetries = options.maxRetries ?? 2;
+    let lastError: SDKTaskResult | null = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt > 0) {
+        const waitTime = Math.min(30000, 5000 * Math.pow(2, attempt - 1)); // 5s, 10s, 20s... max 30s
+        console.log(`[SDK] Retry attempt ${attempt}/${maxRetries}, waiting ${waitTime/1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+
+      const result = await this.executeTaskOnce(prompt, options);
+      
+      if (result.success) {
+        return result;
+      }
+
+      lastError = result;
+      console.error(`[SDK] Attempt ${attempt + 1} failed: ${result.error}`);
+
+      // Don't retry on certain errors
+      if (result.error && this.isNonRetryableError(result.error)) {
+        console.log('[SDK] Non-retryable error, not retrying');
+        break;
+      }
+    }
+
+    return lastError || {
+      success: false,
+      output: '',
+      error: 'All retry attempts failed',
+      inputTokens: 0,
+      outputTokens: 0,
+      durationMs: 0,
+    };
+  }
+
+  private isNonRetryableError(message: string): boolean {
+    return (
+      message.includes('invalid_api_key') ||
+      message.includes('authentication') ||
+      message.includes('permission denied')
+    );
+  }
+
+  /**
+   * Single execution attempt
+   */
+  private async executeTaskOnce(prompt: string, options: {
     sessionId?: string;
     allowedTools?: string[];
   } = {}): Promise<SDKTaskResult> {
