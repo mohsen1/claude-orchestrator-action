@@ -6,6 +6,10 @@
  * 
  * NOTE: State is only committed to the MAIN work branch, not to EM/worker branches.
  * This prevents merge conflicts when branches are merged back.
+ * 
+ * IMPORTANT: State saves use merge semantics to handle parallel execution.
+ * When multiple workers save state simultaneously, their changes are merged
+ * rather than overwritten.
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
@@ -16,11 +20,164 @@ import {
   STATE_FILE_PATH, 
   serializeState, 
   parseState,
-  touchState 
+  touchState,
+  EMState,
+  WorkerState
 } from './state.js';
 
 // Track if we're on the main work branch (where state should be committed)
 let cachedWorkBranch: string | null = null;
+
+/**
+ * Merge two states, preferring the most complete/recent data
+ * This handles the case where parallel workers save state simultaneously
+ */
+function mergeStates(localState: OrchestratorState, remoteState: OrchestratorState): OrchestratorState {
+  // Start with the local state as base
+  const merged = { ...localState };
+  
+  // Merge EMs - keep the most complete version of each
+  merged.ems = localState.ems.map((localEM, idx) => {
+    const remoteEM = remoteState.ems[idx];
+    if (!remoteEM) return localEM;
+    
+    return mergeEM(localEM, remoteEM);
+  });
+  
+  // If remote has more EMs (shouldn't happen but handle it)
+  if (remoteState.ems.length > localState.ems.length) {
+    merged.ems.push(...remoteState.ems.slice(localState.ems.length));
+  }
+  
+  // Merge error history - combine unique errors
+  const errorSet = new Set<string>();
+  merged.errorHistory = [];
+  for (const err of [...(localState.errorHistory || []), ...(remoteState.errorHistory || [])]) {
+    const key = `${err.timestamp}-${err.message}`;
+    if (!errorSet.has(key)) {
+      errorSet.add(key);
+      merged.errorHistory.push(err);
+    }
+  }
+  merged.errorHistory.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  
+  // Use the more advanced phase
+  const phaseOrder = [
+    'initialized', 'analyzing', 'project_setup', 'em_assignment',
+    'worker_execution', 'worker_review', 'em_merging', 'em_review',
+    'final_merge', 'final_review', 'complete', 'failed'
+  ];
+  const localPhaseIdx = phaseOrder.indexOf(localState.phase);
+  const remotePhaseIdx = phaseOrder.indexOf(remoteState.phase);
+  if (remotePhaseIdx > localPhaseIdx && remoteState.phase !== 'failed') {
+    merged.phase = remoteState.phase;
+  }
+  
+  // Use newer timestamp
+  if (remoteState.updatedAt && localState.updatedAt && 
+      remoteState.updatedAt > localState.updatedAt) {
+    merged.updatedAt = remoteState.updatedAt;
+  }
+  
+  // Merge finalPr - prefer existing
+  if (!merged.finalPr && remoteState.finalPr) {
+    merged.finalPr = remoteState.finalPr;
+  }
+  
+  return merged;
+}
+
+/**
+ * Merge two EM states, preferring the most complete version
+ */
+function mergeEM(local: EMState, remote: EMState): EMState {
+  const merged = { ...local };
+  
+  // Merge workers - this is critical for parallel execution
+  if (remote.workers.length > local.workers.length) {
+    // Remote has more workers - use remote as base
+    merged.workers = remote.workers.map((remoteWorker, idx) => {
+      const localWorker = local.workers[idx];
+      if (!localWorker) return remoteWorker;
+      return mergeWorker(localWorker, remoteWorker);
+    });
+  } else if (local.workers.length > 0) {
+    // Local has workers - merge with remote
+    merged.workers = local.workers.map((localWorker, idx) => {
+      const remoteWorker = remote.workers[idx];
+      if (!remoteWorker) return localWorker;
+      return mergeWorker(localWorker, remoteWorker);
+    });
+  } else if (remote.workers.length > 0) {
+    // Local has no workers but remote does - use remote
+    merged.workers = remote.workers;
+  }
+  
+  // Use the more advanced status
+  const statusOrder = ['pending', 'workers_running', 'workers_complete', 'pr_created', 'approved', 'merged', 'skipped', 'failed'];
+  const localStatusIdx = statusOrder.indexOf(local.status);
+  const remoteStatusIdx = statusOrder.indexOf(remote.status);
+  
+  // Don't downgrade from a working state to skipped/failed unless we really have no workers
+  if (remote.status === 'skipped' || remote.status === 'failed') {
+    if (merged.workers.length > 0 && merged.workers.some(w => w.status !== 'failed' && w.status !== 'skipped')) {
+      // Keep local status if we have working workers
+    } else if (remoteStatusIdx > localStatusIdx) {
+      merged.status = remote.status;
+      merged.error = remote.error;
+    }
+  } else if (remoteStatusIdx > localStatusIdx) {
+    merged.status = remote.status;
+  }
+  
+  // Use PR info if available
+  if (!merged.prNumber && remote.prNumber) {
+    merged.prNumber = remote.prNumber;
+    merged.prUrl = remote.prUrl;
+  }
+  
+  // Keep reviews addressed count (use max)
+  merged.reviewsAddressed = Math.max(local.reviewsAddressed || 0, remote.reviewsAddressed || 0);
+  
+  return merged;
+}
+
+/**
+ * Merge two worker states, preferring the most complete version
+ */
+function mergeWorker(local: WorkerState, remote: WorkerState): WorkerState {
+  const merged = { ...local };
+  
+  // Use the more advanced status (but don't go backwards from merged/approved)
+  const statusOrder = ['pending', 'in_progress', 'pr_created', 'changes_requested', 'approved', 'merged', 'skipped', 'failed'];
+  const localStatusIdx = statusOrder.indexOf(local.status);
+  const remoteStatusIdx = statusOrder.indexOf(remote.status);
+  
+  if (remoteStatusIdx > localStatusIdx) {
+    merged.status = remote.status;
+  }
+  
+  // Use PR info if available
+  if (!merged.prNumber && remote.prNumber) {
+    merged.prNumber = remote.prNumber;
+    merged.prUrl = remote.prUrl;
+  }
+  
+  // Keep reviews addressed count (use max)
+  merged.reviewsAddressed = Math.max(local.reviewsAddressed || 0, remote.reviewsAddressed || 0);
+  
+  // Use completion time if available
+  if (!merged.completedAt && remote.completedAt) {
+    merged.completedAt = remote.completedAt;
+  }
+  
+  // Keep error info
+  if (!merged.error && remote.error) {
+    merged.error = remote.error;
+  }
+  
+  return merged;
+}
 
 /**
  * Set the main work branch name (call this when starting orchestration)
@@ -59,13 +216,14 @@ export async function loadState(): Promise<OrchestratorState | null> {
 /**
  * Save state to the work branch and commit
  * Always commits to the work branch, even if currently on a different branch
+ * Uses merge semantics to handle parallel execution safely
  */
 export async function saveState(state: OrchestratorState, message?: string): Promise<void> {
   const { execa } = await import('execa');
   
   try {
     // Update timestamp
-    const updatedState = touchState(state);
+    let stateToSave = touchState(state);
     
     // Cache the work branch
     if (state.workBranch) {
@@ -82,12 +240,31 @@ export async function saveState(state: OrchestratorState, message?: string): Pro
     const isOnWorkBranch = currentBranch === cachedWorkBranch;
     
     if (isOnWorkBranch) {
-      // Simple case: we're on the work branch, just save normally
+      // Simple case: we're on the work branch
+      // Still need to pull and merge to handle concurrent saves
+      try {
+        await execa('git', ['fetch', 'origin', cachedWorkBranch]);
+        // Check if remote has changes
+        const { stdout: diff } = await execa('git', ['rev-list', '--count', `HEAD..origin/${cachedWorkBranch}`]);
+        if (parseInt(diff.trim(), 10) > 0) {
+          // Remote has changes - pull and merge state
+          await execa('git', ['pull', '--rebase', 'origin', cachedWorkBranch]);
+          if (existsSync(STATE_FILE_PATH)) {
+            const remoteContent = readFileSync(STATE_FILE_PATH, 'utf-8');
+            const remoteState = parseState(remoteContent);
+            stateToSave = mergeStates(stateToSave, remoteState);
+            console.log('  Merged with remote state changes');
+          }
+        }
+      } catch {
+        // Pull failed, continue with local state
+      }
+      
       const dir = dirname(STATE_FILE_PATH);
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
       }
-      writeFileSync(STATE_FILE_PATH, serializeState(updatedState));
+      writeFileSync(STATE_FILE_PATH, serializeState(stateToSave));
       
       const commitMessage = message || `chore: update orchestrator state (phase: ${state.phase})`;
       const hasChanges = await GitOperations.hasUncommittedChanges();
@@ -99,7 +276,7 @@ export async function saveState(state: OrchestratorState, message?: string): Pro
       }
     } else {
       // Complex case: we're on a different branch
-      // Need to switch to work branch, save state, and switch back
+      // Need to switch to work branch, merge state, save, and switch back
       console.log(`Saving state to work branch (currently on ${currentBranch})...`);
       
       // Check for uncommitted changes (excluding state file)
@@ -136,9 +313,16 @@ export async function saveState(state: OrchestratorState, message?: string): Pro
         // Checkout work branch
         await execa('git', ['checkout', cachedWorkBranch]);
         
-        // Pull latest changes to avoid conflicts (but don't fail if branch doesn't exist remotely yet)
+        // Pull latest changes and MERGE with our state
         try {
           await execa('git', ['pull', '--rebase', 'origin', cachedWorkBranch]);
+          // Load remote state and merge
+          if (existsSync(STATE_FILE_PATH)) {
+            const remoteContent = readFileSync(STATE_FILE_PATH, 'utf-8');
+            const remoteState = parseState(remoteContent);
+            stateToSave = mergeStates(stateToSave, remoteState);
+            console.log('  Merged with remote state changes');
+          }
         } catch {
           // Branch might not exist remotely yet, or no commits to pull
         }
@@ -149,22 +333,53 @@ export async function saveState(state: OrchestratorState, message?: string): Pro
           mkdirSync(dir, { recursive: true });
         }
         
-        // Write state file
-        writeFileSync(STATE_FILE_PATH, serializeState(updatedState));
+        // Write merged state file
+        writeFileSync(STATE_FILE_PATH, serializeState(stateToSave));
         
-        // Commit and push (use regular push, NOT force-push to avoid auto-closing PRs)
+        // Commit and push
         const commitMessage = message || `chore: update orchestrator state (phase: ${state.phase})`;
         await execa('git', ['add', STATE_FILE_PATH]);
+        
+        // Check if there are actual changes to commit
+        try {
+          const { stdout: status } = await execa('git', ['status', '--porcelain', STATE_FILE_PATH]);
+          if (!status.trim()) {
+            console.log('  No state changes to commit');
+            return;
+          }
+        } catch {
+          // Continue with commit attempt
+        }
+        
         await execa('git', ['commit', '-m', commitMessage]);
         
-        // Try regular push first
-        try {
-          await execa('git', ['push', '-u', 'origin', cachedWorkBranch]);
-        } catch (pushErr) {
-          // If regular push fails, pull and retry (but NOT force push!)
-          console.log('  Push failed, pulling and retrying...');
-          await execa('git', ['pull', '--rebase', 'origin', cachedWorkBranch]);
-          await execa('git', ['push', '-u', 'origin', cachedWorkBranch]);
+        // Try regular push first, with retry on conflict
+        let pushAttempts = 0;
+        const maxAttempts = 3;
+        while (pushAttempts < maxAttempts) {
+          try {
+            await execa('git', ['push', '-u', 'origin', cachedWorkBranch]);
+            break;
+          } catch (pushErr) {
+            pushAttempts++;
+            if (pushAttempts >= maxAttempts) {
+              console.error('  Push failed after max attempts');
+              break;
+            }
+            // Pull, re-merge, and retry
+            console.log(`  Push failed (attempt ${pushAttempts}), pulling and retrying...`);
+            await execa('git', ['pull', '--rebase', 'origin', cachedWorkBranch]);
+            
+            // Re-read remote state and merge again
+            if (existsSync(STATE_FILE_PATH)) {
+              const remoteContent = readFileSync(STATE_FILE_PATH, 'utf-8');
+              const remoteState = parseState(remoteContent);
+              stateToSave = mergeStates(stateToSave, remoteState);
+              writeFileSync(STATE_FILE_PATH, serializeState(stateToSave));
+              await execa('git', ['add', STATE_FILE_PATH]);
+              await execa('git', ['commit', '--amend', '--no-edit']);
+            }
+          }
         }
         console.log(`  State saved and pushed to ${cachedWorkBranch}: ${state.phase}`);
         

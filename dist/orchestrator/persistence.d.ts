@@ -6,6 +6,10 @@
  *
  * NOTE: State is only committed to the MAIN work branch, not to EM/worker branches.
  * This prevents merge conflicts when branches are merged back.
+ *
+ * IMPORTANT: State saves use merge semantics to handle parallel execution.
+ * When multiple workers save state simultaneously, their changes are merged
+ * rather than overwritten.
  */
 import { OrchestratorState } from './state.js';
 /**
@@ -20,6 +24,7 @@ export declare function loadState(): Promise<OrchestratorState | null>;
 /**
  * Save state to the work branch and commit
  * Always commits to the work branch, even if currently on a different branch
+ * Uses merge semantics to handle parallel execution safely
  */
 export declare function saveState(state: OrchestratorState, message?: string): Promise<void>;
 /**
