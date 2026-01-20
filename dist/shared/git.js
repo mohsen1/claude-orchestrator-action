@@ -339,24 +339,21 @@ export const GitOperations = {
      * @returns void
      */
     async push(branchName) {
+        const target = branchName || 'HEAD';
         try {
-            if (branchName) {
-                try {
-                    await execa('git', ['push', '-u', 'origin', branchName]);
-                }
-                catch {
-                    // If normal push fails, use force-with-lease (safe force push)
-                    await execa('git', ['push', '--force-with-lease', '-u', 'origin', branchName]);
-                }
+            try {
+                await execa('git', ['push', '-u', 'origin', target]);
             }
-            else {
+            catch {
+                // If normal push fails, fetch and try force-with-lease
+                console.log('Normal push failed, fetching and retrying with force-with-lease...');
                 try {
-                    await execa('git', ['push', '-u', 'origin', 'HEAD']);
+                    await execa('git', ['fetch', 'origin']);
                 }
                 catch {
-                    // If normal push fails, use force-with-lease (safe force push)
-                    await execa('git', ['push', '--force-with-lease', '-u', 'origin', 'HEAD']);
+                    // Fetch might fail if branch doesn't exist remotely yet
                 }
+                await execa('git', ['push', '--force-with-lease', '-u', 'origin', target]);
             }
         }
         catch (error) {
