@@ -58,9 +58,11 @@ export async function loadState(): Promise<OrchestratorState | null> {
 
 /**
  * Save state to the work branch and commit
- * Only commits if on the main work branch to prevent conflicts
+ * Always commits to the work branch, even if currently on a different branch
  */
 export async function saveState(state: OrchestratorState, message?: string): Promise<void> {
+  const { execa } = await import('execa');
+  
   try {
     // Update timestamp
     const updatedState = touchState(state);
@@ -70,21 +72,23 @@ export async function saveState(state: OrchestratorState, message?: string): Pro
       cachedWorkBranch = state.workBranch;
     }
     
-    // Ensure directory exists
-    const dir = dirname(STATE_FILE_PATH);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
+    if (!cachedWorkBranch) {
+      console.log('No work branch cached, cannot save state');
+      return;
     }
     
-    // Write state file locally (always do this for recovery)
-    writeFileSync(STATE_FILE_PATH, serializeState(updatedState));
-    
-    // Check current branch
+    // Get current branch
     const currentBranch = await GitOperations.getCurrentBranch();
     const isOnWorkBranch = currentBranch === cachedWorkBranch;
     
-    // Only commit and push if on the main work branch
     if (isOnWorkBranch) {
+      // Simple case: we're on the work branch, just save normally
+      const dir = dirname(STATE_FILE_PATH);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      writeFileSync(STATE_FILE_PATH, serializeState(updatedState));
+      
       const commitMessage = message || `chore: update orchestrator state (phase: ${state.phase})`;
       const hasChanges = await GitOperations.hasUncommittedChanges();
       if (hasChanges) {
@@ -94,11 +98,85 @@ export async function saveState(state: OrchestratorState, message?: string): Pro
         console.log('No state changes to commit');
       }
     } else {
-      console.log(`State saved locally (not on work branch: ${currentBranch} vs ${cachedWorkBranch})`);
+      // Complex case: we're on a different branch
+      // Need to switch to work branch, save state, and switch back
+      console.log(`Saving state to work branch (currently on ${currentBranch})...`);
+      
+      // Check for uncommitted changes (excluding state file)
+      let needStash = false;
+      try {
+        const { stdout } = await execa('git', ['status', '--porcelain']);
+        // Filter out the state file from the check
+        const otherChanges = stdout.split('\n').filter(line => 
+          line.trim() && !line.includes('.orchestrator/state.json')
+        );
+        needStash = otherChanges.length > 0;
+      } catch {
+        // Ignore status errors
+      }
+      
+      // Stash changes if needed
+      if (needStash) {
+        try {
+          await execa('git', ['stash', 'push', '-m', 'saveState: temporary stash']);
+          console.log('  Stashed uncommitted changes');
+        } catch (err) {
+          console.log('  Could not stash changes:', (err as Error).message);
+        }
+      }
+      
+      try {
+        // Discard any local state file changes
+        try {
+          await execa('git', ['checkout', '--', STATE_FILE_PATH]);
+        } catch {
+          // File might not exist, that's OK
+        }
+        
+        // Checkout work branch
+        await execa('git', ['checkout', cachedWorkBranch]);
+        
+        // Ensure directory exists
+        const dir = dirname(STATE_FILE_PATH);
+        if (!existsSync(dir)) {
+          mkdirSync(dir, { recursive: true });
+        }
+        
+        // Write state file
+        writeFileSync(STATE_FILE_PATH, serializeState(updatedState));
+        
+        // Commit and push
+        const commitMessage = message || `chore: update orchestrator state (phase: ${state.phase})`;
+        await execa('git', ['add', STATE_FILE_PATH]);
+        await execa('git', ['commit', '-m', commitMessage]);
+        await execa('git', ['fetch', 'origin', cachedWorkBranch]);
+        await execa('git', ['push', '--force-with-lease', 'origin', cachedWorkBranch]);
+        console.log(`  State saved and pushed to ${cachedWorkBranch}: ${state.phase}`);
+        
+      } finally {
+        // Switch back to original branch
+        try {
+          await execa('git', ['checkout', currentBranch]);
+          console.log(`  Switched back to ${currentBranch}`);
+        } catch (err) {
+          console.error('  Failed to switch back to original branch:', (err as Error).message);
+        }
+        
+        // Pop stash if we stashed
+        if (needStash) {
+          try {
+            await execa('git', ['stash', 'pop']);
+            console.log('  Restored stashed changes');
+          } catch (err) {
+            console.log('  Could not restore stash:', (err as Error).message);
+          }
+        }
+      }
     }
   } catch (error) {
     console.error('Failed to save state:', error);
-    throw error;
+    // Don't throw - state save failures shouldn't crash orchestration
+    // The progress comment will still show current status
   }
 }
 

@@ -19,7 +19,7 @@ export declare function setWorkBranch(branch: string): void;
 export declare function loadState(): Promise<OrchestratorState | null>;
 /**
  * Save state to the work branch and commit
- * Only commits if on the main work branch to prevent conflicts
+ * Always commits to the work branch, even if currently on a different branch
  */
 export declare function saveState(state: OrchestratorState, message?: string): Promise<void>;
 /**
