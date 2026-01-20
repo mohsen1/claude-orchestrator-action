@@ -440,7 +440,7 @@ ${this.state.issue.body}
 
 **Your Task:** ${pendingWorker.task}
 
-**Files to work with:** ${pendingWorker.files.length > 0 ? pendingWorker.files.join(', ') : 'Create whatever files are needed'}
+**Files to work with:** ${pendingWorker.files?.length > 0 ? pendingWorker.files.join(', ') : 'Create whatever files are needed'}
 
 **Context - Original Issue:**
 ${this.state.issue.body}
