@@ -8,6 +8,7 @@
  * 3. Executes action
  * 4. Updates state and exits
  */
+import { execa } from 'execa';
 import { GitHubClient } from '../shared/github.js';
 import { GitOperations } from '../shared/git.js';
 import { SDKRunner } from '../shared/sdk-runner.js';
@@ -575,6 +576,18 @@ ${em.workers.map(w => `  - Worker-${w.id}: ${w.task.substring(0, 60)}...`).join(
 Closes #${this.state.issue.number}
 
 *Automated by Claude Code Orchestrator*`;
+        // Remove state file from work branch before creating PR (it shouldn't be in the final PR)
+        console.log('Removing orchestrator state file from work branch...');
+        await GitOperations.checkout(this.state.workBranch);
+        try {
+            await execa('git', ['rm', '-f', '.orchestrator/state.json']);
+            await execa('git', ['commit', '-m', 'chore: remove orchestrator state file']);
+            await GitOperations.push();
+        }
+        catch (err) {
+            // File might not exist or already removed, that's ok
+            console.log('State file removal skipped (may not exist)');
+        }
         const pr = await this.github.createPullRequest({
             title: `feat: ${this.state.issue.title}`,
             body,
