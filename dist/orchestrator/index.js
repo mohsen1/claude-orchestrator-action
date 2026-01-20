@@ -576,18 +576,7 @@ ${em.workers.map(w => `  - Worker-${w.id}: ${w.task.substring(0, 60)}...`).join(
 Closes #${this.state.issue.number}
 
 *Automated by Claude Code Orchestrator*`;
-        // Remove state file from work branch before creating PR (it shouldn't be in the final PR)
-        console.log('Removing orchestrator state file from work branch...');
-        await GitOperations.checkout(this.state.workBranch);
-        try {
-            await execa('git', ['rm', '-f', '.orchestrator/state.json']);
-            await execa('git', ['commit', '-m', 'chore: remove orchestrator state file']);
-            await GitOperations.push();
-        }
-        catch (err) {
-            // File might not exist or already removed, that's ok
-            console.log('State file removal skipped (may not exist)');
-        }
+        // Create the PR first
         const pr = await this.github.createPullRequest({
             title: `feat: ${this.state.issue.title}`,
             body,
@@ -598,7 +587,19 @@ Closes #${this.state.issue.number}
         await this.github.addLabels(pr.number, [this.state.config.prLabel]);
         this.state.finalPr = { number: pr.number, url: pr.html_url, reviewsAddressed: 0 };
         this.state.phase = 'final_review'; // Wait for final review
-        await saveState(this.state, `chore: final PR created (#${pr.number})`);
+        // Save state but don't commit - we'll remove the state file from the PR
+        await saveState(this.state);
+        // Remove state file from work branch (it shouldn't be in the final PR)
+        console.log('Removing orchestrator state file from work branch...');
+        await GitOperations.checkout(this.state.workBranch);
+        try {
+            await execa('git', ['rm', '-f', '.orchestrator/state.json']);
+            await execa('git', ['commit', '-m', 'chore: remove orchestrator state file']);
+            await GitOperations.push();
+        }
+        catch (err) {
+            console.log('State file removal failed:', err.message);
+        }
         // Post comment on issue
         await this.github.updateIssueComment(this.state.issue.number, `## Orchestration Complete\n\nFinal PR: #${pr.number}\n${pr.html_url}\n\nThe PR will respond to code review feedback automatically.\n\n---\n*Automated by Claude Code Orchestrator*`);
         console.log(`Final PR created: ${pr.html_url}`);
@@ -701,34 +702,122 @@ Closes #${this.state.issue.number}
      */
     async addressReview(branch, prNumber, reviewBody) {
         await GitOperations.checkout(branch);
-        // Also fetch review comments from the PR for more context
+        // Get inline review comments
         const reviewComments = await this.github.getPullRequestComments(prNumber);
-        const commentContext = reviewComments.length > 0
-            ? `\n\n**Inline Review Comments:**\n${reviewComments.map(c => `- ${c.path}:${c.line}: ${c.body}`).join('\n')}`
-            : '';
-        const prompt = `A code reviewer has provided feedback on this PR. Please address ALL the issues mentioned.
+        // Process each inline comment individually
+        if (reviewComments.length > 0) {
+            console.log(`Processing ${reviewComments.length} inline comments...`);
+            await this.processInlineComments(prNumber, reviewComments, branch);
+        }
+        // If there's also a general review body, address it
+        if (reviewBody && reviewBody.trim().length > 20) {
+            console.log('Addressing general review feedback...');
+            await this.addressGeneralReviewFeedback(branch, reviewBody);
+        }
+        // Commit and push any remaining changes
+        const hasChanges = await GitOperations.hasUncommittedChanges();
+        if (hasChanges) {
+            await GitOperations.commitAndPush('fix: address review feedback', branch);
+            console.log('Review feedback addressed and pushed');
+        }
+        else {
+            console.log('All review comments handled');
+        }
+    }
+    /**
+     * Process each inline comment individually
+     */
+    async processInlineComments(prNumber, comments, _branch) {
+        for (const comment of comments) {
+            // Skip bot comments or already resolved comments
+            if (comment.user === 'github-actions[bot]')
+                continue;
+            console.log(`\n  Processing comment on ${comment.path}:${comment.line || 'N/A'}`);
+            console.log(`  Comment: "${comment.body.substring(0, 100)}${comment.body.length > 100 ? '...' : ''}"`);
+            // Ask Claude to analyze if the comment is actionable
+            const analysisPrompt = `Analyze this code review comment and determine if it requires code changes.
 
-**Review Feedback:**
-${reviewBody}${commentContext}
+**File:** ${comment.path}
+**Line:** ${comment.line || 'N/A'}
+**Comment:** ${comment.body}
 
-**Instructions:**
-1. Address each point raised in the review
-2. Make the necessary code changes
-3. DO NOT create documentation files - just fix the code
-4. Be thorough - address ALL comments, not just some
+Respond in JSON format only:
+{
+  "actionable": true or false,
+  "reason": "Brief explanation of why this is or isn't actionable",
+  "suggestedFix": "If actionable, describe what code changes should be made"
+}
 
-Make the changes now.`;
-        const result = await this.sdkRunner.executeTask(prompt);
-        if (result.success) {
-            const hasChanges = await GitOperations.hasUncommittedChanges();
-            if (hasChanges) {
-                await GitOperations.commitAndPush('fix: address review feedback', branch);
-                console.log('Review feedback addressed and pushed');
+A comment is NOT actionable if:
+- It's just a question that doesn't require code changes
+- It's praise or acknowledgment
+- It suggests something that contradicts the requirements
+- It's asking for clarification rather than requesting changes
+- The suggestion would break existing functionality
+
+A comment IS actionable if:
+- It points out a bug or error
+- It suggests a valid improvement
+- It identifies missing error handling
+- It requests a specific code change that makes sense`;
+            const analysis = await this.sdkRunner.executeTask(analysisPrompt);
+            let isActionable = false;
+            let reason = '';
+            let suggestedFix = '';
+            try {
+                // Parse Claude's response
+                const jsonMatch = analysis.output?.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                    const parsed = JSON.parse(jsonMatch[0]);
+                    isActionable = parsed.actionable === true;
+                    reason = parsed.reason || '';
+                    suggestedFix = parsed.suggestedFix || '';
+                }
+            }
+            catch (e) {
+                // If parsing fails, assume actionable to be safe
+                isActionable = true;
+                reason = 'Could not parse analysis, treating as actionable';
+            }
+            if (isActionable) {
+                console.log(`  -> Actionable: ${reason}`);
+                // Make the code changes
+                const fixPrompt = `Fix the code based on this review comment.
+
+**File:** ${comment.path}
+**Line:** ${comment.line || 'N/A'}  
+**Comment:** ${comment.body}
+**Suggested Fix:** ${suggestedFix}
+
+Make the necessary code changes now. Only modify the specific file mentioned.
+DO NOT create any new files or documentation.`;
+                await this.sdkRunner.executeTask(fixPrompt);
+                // Reply to the comment with what was done
+                await this.github.replyToReviewComment(prNumber, comment.id, `Fixed! ${suggestedFix || 'Made the requested changes.'}`);
+                console.log(`  -> Fixed and replied`);
             }
             else {
-                console.log('No changes needed to address review');
+                console.log(`  -> Not actionable: ${reason}`);
+                // Reply explaining why no changes were made
+                await this.github.replyToReviewComment(prNumber, comment.id, `Thank you for the feedback. ${reason}\n\nNo code changes were made for this comment.`);
+                console.log(`  -> Replied with explanation`);
             }
         }
+    }
+    /**
+     * Address general review feedback (not inline comments)
+     */
+    async addressGeneralReviewFeedback(_branch, reviewBody) {
+        const prompt = `A code reviewer has provided general feedback. Address it if it requires code changes.
+
+**Review Feedback:**
+${reviewBody}
+
+**Instructions:**
+- Only make code changes if the feedback clearly requires them
+- DO NOT create documentation files
+- If the feedback is just a question or doesn't require changes, do nothing`;
+        await this.sdkRunner.executeTask(prompt);
     }
     /**
      * Address review feedback on the final PR
@@ -737,36 +826,30 @@ Make the changes now.`;
         if (!this.state)
             throw new Error('No state');
         await GitOperations.checkout(this.state.workBranch);
-        // Fetch review comments
+        // Get inline review comments
         const reviewComments = await this.github.getPullRequestComments(prNumber);
-        const commentContext = reviewComments.length > 0
-            ? `\n\n**Inline Review Comments:**\n${reviewComments.map(c => `- ${c.path}:${c.line}: ${c.body}`).join('\n')}`
-            : '';
-        const prompt = `A code reviewer has provided feedback on the final PR. Please address ALL the issues mentioned.
-
-**Review Feedback:**
-${reviewBody}${commentContext}
-
-**Instructions:**
-1. Address each point raised in the review
-2. Make the necessary code changes across any files that need fixing
-3. DO NOT create documentation files - just fix the code
-4. Be thorough - address ALL comments
-
-Make the changes now.`;
-        const result = await this.sdkRunner.executeTask(prompt);
-        if (result.success) {
-            const hasChanges = await GitOperations.hasUncommittedChanges();
-            if (hasChanges) {
-                await GitOperations.commitAndPush('fix: address final PR review feedback', this.state.workBranch);
-                this.state.finalPr.reviewsAddressed = (this.state.finalPr.reviewsAddressed || 0) + 1;
-                await saveState(this.state);
-                console.log('Final PR review feedback addressed and pushed');
-            }
-            else {
-                console.log('No changes needed to address final PR review');
-            }
+        // Process each inline comment individually
+        if (reviewComments.length > 0) {
+            console.log(`Processing ${reviewComments.length} inline comments on final PR...`);
+            await this.processInlineComments(prNumber, reviewComments, this.state.workBranch);
         }
+        // If there's also a general review body, address it
+        if (reviewBody && reviewBody.trim().length > 20) {
+            console.log('Addressing general review feedback on final PR...');
+            await this.addressGeneralReviewFeedback(this.state.workBranch, reviewBody);
+        }
+        // Commit and push any remaining changes
+        const hasChanges = await GitOperations.hasUncommittedChanges();
+        if (hasChanges) {
+            await GitOperations.commitAndPush('fix: address final PR review feedback', this.state.workBranch);
+            console.log('Final PR review feedback addressed and pushed');
+        }
+        else {
+            console.log('All final PR review comments handled');
+        }
+        this.state.finalPr.reviewsAddressed = (this.state.finalPr.reviewsAddressed || 0) + 1;
+        // Don't save state to avoid re-adding state file to PR
+        // The state tracking is less critical at this point anyway
     }
     /**
      * Handle progress check - continue any pending work

@@ -89,6 +89,14 @@ export declare class EventDrivenOrchestrator {
      */
     private addressReview;
     /**
+     * Process each inline comment individually
+     */
+    private processInlineComments;
+    /**
+     * Address general review feedback (not inline comments)
+     */
+    private addressGeneralReviewFeedback;
+    /**
      * Address review feedback on the final PR
      */
     private addressFinalPRReview;
