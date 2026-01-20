@@ -513,6 +513,41 @@ Implement this task now - code only, no documentation files.`;
         await this.startNextWorker(em);
     }
     /**
+     * Wait for reviews before merging a PR
+     * Uses review_wait_minutes from config to allow automated reviewers (Copilot) time to post
+     */
+    async waitForReviewsBeforeMerge(prNumber, prCreatedAt) {
+        const waitMinutes = this.state?.config.reviewWaitMinutes || 5;
+        const waitSeconds = waitMinutes * 60;
+        if (prCreatedAt) {
+            const createdTime = new Date(prCreatedAt).getTime();
+            const now = Date.now();
+            const elapsed = (now - createdTime) / 1000;
+            if (elapsed < waitSeconds) {
+                const waitTime = Math.ceil(waitSeconds - elapsed);
+                console.log(`  Waiting ${Math.ceil(waitTime / 60)}m ${waitTime % 60}s for reviews on PR #${prNumber} (configured: ${waitMinutes}m)...`);
+                await new Promise(resolve => setTimeout(resolve, waitTime * 1000));
+            }
+        }
+        else {
+            // No creation time, wait the full period
+            console.log(`  Waiting ${waitMinutes}m for reviews on PR #${prNumber}...`);
+            await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
+        }
+        // Check for any unaddressed reviews
+        const reviews = await this.github.getPullRequestReviews(prNumber);
+        const hasChangesRequested = reviews.some(r => r.state === 'CHANGES_REQUESTED');
+        if (hasChangesRequested) {
+            console.log(`  PR #${prNumber} has changes requested - will not merge yet`);
+            throw new Error('PR has unaddressed review comments');
+        }
+        // Check for inline comments that might need addressing
+        const comments = await this.github.getPullRequestComments(prNumber);
+        if (comments.length > 0) {
+            console.log(`  PR #${prNumber} has ${comments.length} review comments - will address them`);
+        }
+    }
+    /**
      * Create EM PR after all workers are done
      */
     async createEMPullRequest(em) {
@@ -522,6 +557,14 @@ Implement this task now - code only, no documentation files.`;
         console.log(`\nMerging worker PRs for EM-${em.id}...`);
         for (const worker of em.workers) {
             if (worker.prNumber && (worker.status === 'pr_created' || worker.status === 'approved')) {
+                // Wait for reviews before merging
+                try {
+                    await this.waitForReviewsBeforeMerge(worker.prNumber, worker.completedAt);
+                }
+                catch (err) {
+                    console.log(`  Skipping merge of Worker-${worker.id} PR: ${err.message}`);
+                    continue;
+                }
                 let result = await this.github.mergePullRequest(worker.prNumber);
                 // If base branch was modified, try to update and retry
                 if (!result.merged && result.error?.includes('Base branch modified')) {

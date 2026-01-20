@@ -69,6 +69,11 @@ export declare class EventDrivenOrchestrator {
      */
     private startNextWorker;
     /**
+     * Wait for reviews before merging a PR
+     * Uses review_wait_minutes from config to allow automated reviewers (Copilot) time to post
+     */
+    private waitForReviewsBeforeMerge;
+    /**
      * Create EM PR after all workers are done
      */
     private createEMPullRequest;
