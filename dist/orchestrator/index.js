@@ -794,8 +794,9 @@ Closes #${this.state.issue.number}
         catch (err) {
             console.log('State file removal failed:', err.message);
         }
-        // Post comment on issue
-        await this.github.updateIssueComment(this.state.issue.number, `## Orchestration Complete\n\nFinal PR: #${pr.number}\n${pr.html_url}\n\nThe PR will respond to code review feedback automatically.\n\n---\n*Automated by Claude Code Orchestrator*`);
+        // Update progress comment to show completion (uses same header to update, not create new)
+        this.state.phase = 'complete';
+        await this.updateProgressComment();
         console.log(`Final PR created: ${pr.html_url}`);
     }
     /**
