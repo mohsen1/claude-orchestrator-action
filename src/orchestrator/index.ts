@@ -561,23 +561,29 @@ ${this.state.issue.body}
 ${this.state.issue.body}
 
 **CRITICAL Instructions:**
-1. Implement the task completely
-2. Create or modify ONLY the necessary source code files
-3. Write clean, production-ready TypeScript/JavaScript code
+1. Create files directly in the current directory (NOT in a subdirectory)
+2. NEVER run "npm install" - only create config files
+3. Implement the task completely with clean, production-ready code
 4. Include necessary imports and exports
 
-**DO NOT create these files:**
-- IMPLEMENTATION_SUMMARY.md or any summary/documentation files
+**ABSOLUTE RULES:**
+- Create files in the ROOT directory, NOT inside any subdirectory
+- Do NOT create or commit node_modules under any circumstances
+- If creating a Next.js project, do NOT use "npx create-next-app" - manually create the files
+- Write the actual file contents, don't run scaffolding commands
+
+**DO NOT create:**
+- node_modules/ directory
+- Any SUMMARY.md or documentation files
 - README.md (unless specifically asked)
-- test files (unless specifically asked)
-- Any files that explain what you did - just do the code
 
-If this is a setup task, ensure you create:
-- .gitignore with node_modules, dist, .env, etc.
-- package.json with appropriate dependencies
-- tsconfig.json if TypeScript is used
+**If this is a setup task, create files in THIS ORDER:**
+1. .gitignore FIRST (must include: node_modules, .next, .env*, dist)
+2. package.json with dependencies
+3. tsconfig.json for TypeScript
+4. Other config files as needed
 
-Implement this task now - code only, no documentation files.`;
+Implement this task now.`;
 
     const result = await this.sdkRunner.executeTask(prompt);
 
