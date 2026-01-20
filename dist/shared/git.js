@@ -181,15 +181,17 @@ export const GitOperations = {
                 await execa('git', ['push', '-u', 'origin', branchToPush]);
             }
             catch {
-                // If normal push fails, fetch and try force-with-lease
-                console.log('Normal push failed, fetching and retrying with force-with-lease...');
+                // If normal push fails, try pull-rebase then push (avoid force-push which can close PRs)
+                console.log('Normal push failed, pulling and retrying...');
                 try {
-                    await execa('git', ['fetch', 'origin']);
+                    await execa('git', ['pull', '--rebase', 'origin', branchToPush]);
+                    await execa('git', ['push', '-u', 'origin', branchToPush]);
                 }
                 catch {
-                    // Fetch might fail if branch doesn't exist remotely yet, that's ok
+                    // If pull-rebase fails (e.g., branch doesn't exist remotely), just push
+                    console.log('Pull-rebase failed, trying direct push...');
+                    await execa('git', ['push', '-u', 'origin', branchToPush]);
                 }
-                await execa('git', ['push', '--force-with-lease', '-u', 'origin', branchToPush]);
             }
         }
         catch (error) {
@@ -375,15 +377,17 @@ export const GitOperations = {
                 await execa('git', ['push', '-u', 'origin', target]);
             }
             catch {
-                // If normal push fails, fetch and try force-with-lease
-                console.log('Normal push failed, fetching and retrying with force-with-lease...');
+                // If normal push fails, try pull-rebase then push (avoid force-push which can close PRs)
+                console.log('Normal push failed, pulling and retrying...');
                 try {
-                    await execa('git', ['fetch', 'origin']);
+                    await execa('git', ['pull', '--rebase', 'origin', target]);
+                    await execa('git', ['push', '-u', 'origin', target]);
                 }
                 catch {
-                    // Fetch might fail if branch doesn't exist remotely yet
+                    // If pull-rebase fails (e.g., branch doesn't exist remotely), just push
+                    console.log('Pull-rebase failed, trying direct push...');
+                    await execa('git', ['push', '-u', 'origin', target]);
                 }
-                await execa('git', ['push', '--force-with-lease', '-u', 'origin', target]);
             }
         }
         catch (error) {

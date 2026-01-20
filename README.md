@@ -1,5 +1,7 @@
 # Claude Code Orchestrator Action
 
+Run very large software engineering tasks using many agents in parallel. Uses GitHub Actions for orchestration of agents. This unlocks GitHub's CI and code review capabilities for agentic software development.
+
 An event-driven, hierarchical AI development system using GitHub Actions. The system uses a Director -> Engineering Manager (EM) -> Worker model to break down issues into parallel tasks executed by Claude AI.
 
 ## Overview

@@ -115,6 +115,13 @@ export async function saveState(state, message) {
                 }
                 // Checkout work branch
                 await execa('git', ['checkout', cachedWorkBranch]);
+                // Pull latest changes to avoid conflicts (but don't fail if branch doesn't exist remotely yet)
+                try {
+                    await execa('git', ['pull', '--rebase', 'origin', cachedWorkBranch]);
+                }
+                catch {
+                    // Branch might not exist remotely yet, or no commits to pull
+                }
                 // Ensure directory exists
                 const dir = dirname(STATE_FILE_PATH);
                 if (!existsSync(dir)) {
@@ -122,12 +129,20 @@ export async function saveState(state, message) {
                 }
                 // Write state file
                 writeFileSync(STATE_FILE_PATH, serializeState(updatedState));
-                // Commit and push
+                // Commit and push (use regular push, NOT force-push to avoid auto-closing PRs)
                 const commitMessage = message || `chore: update orchestrator state (phase: ${state.phase})`;
                 await execa('git', ['add', STATE_FILE_PATH]);
                 await execa('git', ['commit', '-m', commitMessage]);
-                await execa('git', ['fetch', 'origin', cachedWorkBranch]);
-                await execa('git', ['push', '--force-with-lease', 'origin', cachedWorkBranch]);
+                // Try regular push first
+                try {
+                    await execa('git', ['push', '-u', 'origin', cachedWorkBranch]);
+                }
+                catch (pushErr) {
+                    // If regular push fails, pull and retry (but NOT force push!)
+                    console.log('  Push failed, pulling and retrying...');
+                    await execa('git', ['pull', '--rebase', 'origin', cachedWorkBranch]);
+                    await execa('git', ['push', '-u', 'origin', cachedWorkBranch]);
+                }
                 console.log(`  State saved and pushed to ${cachedWorkBranch}: ${state.phase}`);
             }
             finally {
