@@ -1948,6 +1948,8 @@ Closes #${this.state.issue.number}
             }
         }
         await saveState(this.state);
+        // Proactively check for reviews on other worker PRs before proceeding
+        await this.checkAndAddressReviews();
         // Event-driven: Dispatch next steps instead of continuing inline
         if (mergedEM) {
             // Check if all workers for this EM are merged
@@ -1972,6 +1974,57 @@ Closes #${this.state.issue.number}
         await this.updateProgressComment();
     }
     /**
+     * Proactively check for reviews on all PRs and address them
+     */
+    async checkAndAddressReviews() {
+        if (!this.state)
+            return;
+        for (const em of this.state.ems) {
+            // Check worker PRs
+            for (const worker of em.workers) {
+                if (worker.prNumber && worker.status === 'pr_created') {
+                    try {
+                        const reviews = await this.github.getPullRequestReviews(worker.prNumber);
+                        const comments = await this.github.getPullRequestComments(worker.prNumber);
+                        const hasActionableReview = reviews.some(r => r.state === 'CHANGES_REQUESTED' ||
+                            (r.state === 'COMMENTED' && r.body && r.body.length > 20)) || comments.length > 0;
+                        if (hasActionableReview) {
+                            console.log(`Worker-${worker.id} PR #${worker.prNumber} has reviews - addressing`);
+                            await this.github.setStatusLabel(worker.prNumber, STATUS_LABELS.ADDRESSING_FEEDBACK);
+                            await this.addressReview(worker.branch, worker.prNumber, '');
+                            worker.reviewsAddressed++;
+                            await this.github.setStatusLabel(worker.prNumber, STATUS_LABELS.AWAITING_REVIEW);
+                            await saveState(this.state);
+                        }
+                    }
+                    catch (err) {
+                        console.log(`Could not check reviews for Worker-${worker.id} PR: ${err.message}`);
+                    }
+                }
+            }
+            // Check EM PRs
+            if (em.prNumber && em.status === 'pr_created') {
+                try {
+                    const reviews = await this.github.getPullRequestReviews(em.prNumber);
+                    const comments = await this.github.getPullRequestComments(em.prNumber);
+                    const hasActionableReview = reviews.some(r => r.state === 'CHANGES_REQUESTED' ||
+                        (r.state === 'COMMENTED' && r.body && r.body.length > 20)) || comments.length > 0;
+                    if (hasActionableReview) {
+                        console.log(`EM-${em.id} PR #${em.prNumber} has reviews - addressing`);
+                        await this.github.setStatusLabel(em.prNumber, STATUS_LABELS.ADDRESSING_FEEDBACK);
+                        await this.addressReview(em.branch, em.prNumber, '');
+                        em.reviewsAddressed++;
+                        await this.github.setStatusLabel(em.prNumber, STATUS_LABELS.AWAITING_REVIEW);
+                        await saveState(this.state);
+                    }
+                }
+                catch (err) {
+                    console.log(`Could not check reviews for EM-${em.id} PR: ${err.message}`);
+                }
+            }
+        }
+    }
+    /**
      * Handle PR review event
      */
     async handlePRReview(event) {
@@ -1979,13 +2032,31 @@ Closes #${this.state.issue.number}
             console.log('PR review event: missing prNumber or branch');
             return;
         }
+        // Fetch review details from API if not provided (for Copilot reviews)
+        let reviewState = event.reviewState;
+        let reviewBody = event.reviewBody || '';
+        if (!reviewState || !reviewBody) {
+            try {
+                const reviews = await this.github.getPullRequestReviews(event.prNumber);
+                const latestReview = reviews[reviews.length - 1];
+                if (latestReview) {
+                    reviewState = latestReview.state.toLowerCase();
+                    reviewBody = latestReview.body || '';
+                }
+            }
+            catch (err) {
+                console.log(`Could not fetch review details: ${err.message}`);
+            }
+        }
         // Only act on changes_requested or commented (for Copilot reviews with comments)
-        if (event.reviewState !== 'changes_requested' && event.reviewState !== 'commented') {
-            console.log(`PR review event: state is ${event.reviewState}, no action needed`);
+        if (reviewState !== 'changes_requested' && reviewState !== 'commented') {
+            console.log(`PR review event: state is ${reviewState}, no action needed`);
             return;
         }
         // For 'commented' reviews, check if there's actual actionable feedback
-        if (event.reviewState === 'commented' && (!event.reviewBody || event.reviewBody.length < 20)) {
+        // Also check for inline comments
+        const hasInlineComments = (await this.github.getPullRequestComments(event.prNumber)).length > 0;
+        if (reviewState === 'commented' && (!reviewBody || reviewBody.length < 20) && !hasInlineComments) {
             console.log('PR review event: commented but no substantial feedback');
             return;
         }
@@ -2000,7 +2071,7 @@ Closes #${this.state.issue.number}
         // Check if this is the final PR
         if (this.state.finalPr?.number === event.prNumber) {
             console.log('Addressing review on final PR');
-            await this.addressFinalPRReview(event.prNumber, event.reviewBody || '');
+            await this.addressFinalPRReview(event.prNumber, reviewBody);
             return;
         }
         // Find the worker or EM that owns this PR
@@ -2010,12 +2081,13 @@ Closes #${this.state.issue.number}
                     console.log(`Addressing review on Worker-${worker.id} PR`);
                     // Set status to addressing feedback while working
                     await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.ADDRESSING_FEEDBACK);
-                    await this.addressReview(worker.branch, event.prNumber, event.reviewBody || '');
+                    await this.addressReview(worker.branch, event.prNumber, reviewBody);
                     worker.reviewsAddressed++;
                     worker.status = 'pr_created';
                     // Set back to awaiting review after addressing
                     await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.AWAITING_REVIEW);
                     await saveState(this.state);
+                    await this.updateProgressComment();
                     return;
                 }
             }
@@ -2023,12 +2095,13 @@ Closes #${this.state.issue.number}
                 console.log(`Addressing review on EM-${em.id} PR`);
                 // Set status to addressing feedback while working
                 await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.ADDRESSING_FEEDBACK);
-                await this.addressReview(em.branch, event.prNumber, event.reviewBody || '');
+                await this.addressReview(em.branch, event.prNumber, reviewBody);
                 em.reviewsAddressed++;
                 em.status = 'pr_created';
                 // Set back to awaiting review after addressing
                 await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.AWAITING_REVIEW);
                 await saveState(this.state);
+                await this.updateProgressComment();
                 return;
             }
         }

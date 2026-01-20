@@ -178,6 +178,10 @@ export declare class EventDrivenOrchestrator {
      */
     private handlePRMerged;
     /**
+     * Proactively check for reviews on all PRs and address them
+     */
+    private checkAndAddressReviews;
+    /**
      * Handle PR review event
      */
     private handlePRReview;
