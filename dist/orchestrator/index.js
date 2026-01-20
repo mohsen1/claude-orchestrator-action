@@ -432,21 +432,44 @@ Implement this task now - code only, no documentation files.`;
         // Pull latest EM branch
         await GitOperations.checkout(em.branch);
         await GitOperations.pull(em.branch);
+        // Check if any workers were actually merged
+        const mergedWorkers = em.workers.filter(w => w.status === 'merged');
+        if (mergedWorkers.length === 0) {
+            console.warn(`EM-${em.id}: No workers merged successfully. Skipping EM PR.`);
+            em.status = 'pr_created'; // Mark as done anyway to continue flow
+            em.error = 'No workers merged - all had conflicts';
+            await saveState(this.state);
+            // Continue to next EM
+            await this.startNextEM();
+            return;
+        }
         // Create EM PR to work branch
-        const pr = await this.github.createPullRequest({
-            title: `[EM-${em.id}] ${em.focusArea}: ${em.task.substring(0, 50)}`,
-            body: `## EM-${em.id}: ${em.focusArea}\n\n**Task:** ${em.task}\n\n**Workers:** ${em.workers.length}\n\n---\n*Automated by Claude Code Orchestrator*`,
-            head: em.branch,
-            base: this.state.workBranch
-        });
-        // Add label to PR
-        await this.github.addLabels(pr.number, [this.state.config.prLabel]);
-        em.status = 'pr_created';
-        em.prNumber = pr.number;
-        em.prUrl = pr.html_url;
+        try {
+            const pr = await this.github.createPullRequest({
+                title: `[EM-${em.id}] ${em.focusArea}: ${em.task.substring(0, 50)}`,
+                body: `## EM-${em.id}: ${em.focusArea}\n\n**Task:** ${em.task}\n\n**Workers:** ${em.workers.length} (${mergedWorkers.length} merged)\n\n---\n*Automated by Claude Code Orchestrator*`,
+                head: em.branch,
+                base: this.state.workBranch
+            });
+            // Add label to PR
+            await this.github.addLabels(pr.number, [this.state.config.prLabel]);
+            em.status = 'pr_created';
+            em.prNumber = pr.number;
+            em.prUrl = pr.html_url;
+            console.log(`EM-${em.id} PR created: ${pr.html_url}`);
+        }
+        catch (error) {
+            const errMsg = error.message;
+            if (errMsg.includes('No commits between')) {
+                console.warn(`EM-${em.id}: No commits to PR (branch same as base). Marking as merged.`);
+                em.status = 'merged';
+            }
+            else {
+                throw error;
+            }
+        }
         this.state.phase = 'em_review';
-        await saveState(this.state, `chore: EM-${em.id} PR created (#${pr.number})`);
-        console.log(`EM-${em.id} PR created: ${pr.html_url}`);
+        await saveState(this.state, `chore: EM-${em.id} PR processed`);
         // Start next EM if any
         await this.startNextEM();
     }
