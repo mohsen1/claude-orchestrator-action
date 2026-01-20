@@ -2115,6 +2115,9 @@ ${reviewBody}
   private async continueWorkerExecution(): Promise<void> {
     if (!this.state) return;
 
+    // First, check for PRs that need conflict resolution or review handling
+    await this.handlePRsNeedingAttention();
+
     for (const em of this.state.ems) {
       if (em.status === 'pending' || em.status === 'workers_running') {
         const pendingWorker = getNextPendingWorker(em);
@@ -2130,6 +2133,109 @@ ${reviewBody}
 
     // All EMs done with workers
     await this.checkFinalMerge();
+  }
+
+  /**
+   * Check for worker PRs that need conflict resolution or review handling
+   * This handles cases where events weren't properly triggered
+   */
+  private async handlePRsNeedingAttention(): Promise<void> {
+    if (!this.state) return;
+
+    for (const em of this.state.ems) {
+      for (const worker of em.workers) {
+        if (worker.status !== 'pr_created' || !worker.prNumber) continue;
+
+        // Check the actual PR state on GitHub using the raw API for mergeable info
+        const prDetails = await this.github.getOctokit().rest.pulls.get({
+          owner: this.ctx.repo.owner,
+          repo: this.ctx.repo.name,
+          pull_number: worker.prNumber
+        });
+        
+        // Handle conflicts
+        if (prDetails.data.mergeable === false || prDetails.data.mergeable_state === 'dirty') {
+          console.log(`\n=== Worker-${worker.id} PR #${worker.prNumber} has conflicts - resolving ===`);
+          await this.resolveWorkerConflicts(em, worker);
+          continue;
+        }
+
+        // Handle unaddressed reviews
+        const reviews = await this.github.getPullRequestReviews(worker.prNumber);
+        const reviewComments = await this.github.getPullRequestComments(worker.prNumber);
+        
+        // Check if there are comments that haven't been addressed
+        const hasUnaddressedComments = reviewComments.length > 0 && worker.reviewsAddressed === 0;
+        const hasChangesRequested = reviews.some(r => r.state === 'CHANGES_REQUESTED');
+        const hasReviewWithComments = reviews.some(r => r.state === 'COMMENTED' && reviewComments.length > 0);
+
+        if (hasUnaddressedComments || hasChangesRequested || hasReviewWithComments) {
+          console.log(`\n=== Worker-${worker.id} PR #${worker.prNumber} has unaddressed reviews - handling ===`);
+          await this.github.setStatusLabel(worker.prNumber, STATUS_LABELS.ADDRESSING_FEEDBACK);
+          await this.addressReview(worker.branch, worker.prNumber, '');
+          worker.reviewsAddressed++;
+          await this.github.setStatusLabel(worker.prNumber, STATUS_LABELS.AWAITING_REVIEW);
+          await saveState(this.state);
+        }
+      }
+    }
+  }
+
+  /**
+   * Resolve conflicts on a worker PR by rebasing onto the EM branch
+   */
+  private async resolveWorkerConflicts(em: EMState, worker: { id: number; branch: string; prNumber?: number; status: string; error?: string }): Promise<void> {
+    if (!this.state || !worker.prNumber) return;
+
+    try {
+      await this.github.setStatusLabel(worker.prNumber, STATUS_LABELS.ADDRESSING_FEEDBACK);
+      
+      // Checkout worker branch and pull latest
+      await GitOperations.checkout(worker.branch);
+      await GitOperations.pull(worker.branch);
+
+      // Attempt rebase onto EM branch
+      const rebaseResult = await GitOperations.rebase(em.branch);
+      
+      if (!rebaseResult.success && rebaseResult.hasConflicts && rebaseResult.conflictFiles.length > 0) {
+        console.log(`  Rebase has conflicts in ${rebaseResult.conflictFiles.length} files. Using Claude to resolve...`);
+        
+        // Use Claude to resolve conflicts
+        const sessionId = generateSessionId('worker', this.state.issue.number, em.id, worker.id);
+        await this.claude.resolveConflicts(
+          sessionId,
+          rebaseResult.conflictFiles,
+          em.branch
+        );
+        
+        // Continue rebase after resolution
+        await GitOperations.continueRebase();
+      }
+
+      // Push resolved branch
+      await GitOperations.push(worker.branch);
+      
+      // Update status
+      await this.github.setStatusLabel(worker.prNumber, STATUS_LABELS.AWAITING_REVIEW);
+      console.log(`  Conflicts resolved for Worker-${worker.id}`);
+      
+      await saveState(this.state);
+    } catch (error) {
+      const errMsg = (error as Error).message;
+      console.error(`  Failed to resolve conflicts for Worker-${worker.id}: ${errMsg}`);
+      
+      // Abort rebase if in progress
+      try {
+        await GitOperations.abortRebase();
+      } catch {}
+      
+      // Mark as failed if conflict resolution fails
+      worker.status = 'failed';
+      worker.error = `Conflict resolution failed: ${errMsg}`;
+      await this.github.setStatusLabel(worker.prNumber, STATUS_LABELS.CONFLICTS);
+      addErrorToHistory(this.state, `Worker-${worker.id} conflict resolution failed: ${errMsg}`, `EM-${em.id}`);
+      await saveState(this.state);
+    }
   }
 
   /**

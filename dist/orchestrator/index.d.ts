@@ -169,6 +169,15 @@ export declare class EventDrivenOrchestrator {
      */
     private continueWorkerExecution;
     /**
+     * Check for worker PRs that need conflict resolution or review handling
+     * This handles cases where events weren't properly triggered
+     */
+    private handlePRsNeedingAttention;
+    /**
+     * Resolve conflicts on a worker PR by rebasing onto the EM branch
+     */
+    private resolveWorkerConflicts;
+    /**
      * Check if PRs can be merged
      */
     private checkAndMergePRs;
