@@ -884,6 +884,14 @@ ${emTable}${finalPRSection}${errorSection}
 
 ${this.state.issue.body}
 
+**IMPORTANT - READ FIRST:**
+If this is a web application (Next.js, React, Vue, Angular, Svelte, etc.) with multiple features:
+- You MUST create MULTIPLE EMs (6-10 total)
+- Do NOT put everything in one EM or a few EMs
+- Break down by architectural layers: Setup, Data, Auth, API, UI Components, Pages, Features
+- USE ALL available ${maxEms} EMs for complex apps
+- This is MANDATORY - parallelization is critical for timely delivery
+
 **Understanding the Issue:**
 - This issue may contain test failures in various formats (Rust cargo, Jest, pytest, etc.)
 - Test names with timestamps like \`2026-01-20T13:03:40.5487877Z\` are Rust cargo test output
@@ -1059,6 +1067,14 @@ ${this.state.issue.body}
 **Issue #${this.state.issue.number}: ${this.state.issue.title}**
 
 ${this.state.issue.body}
+
+**IMPORTANT - READ FIRST:**
+If this is a web application (Next.js, React, Vue, Angular, Svelte, etc.) with multiple features:
+- You MUST create MULTIPLE EMs (6-10 total)
+- Do NOT put everything in one EM or a few EMs
+- Break down by architectural layers: Setup, Data, Auth, API, UI Components, Pages, Features
+- USE ALL available ${maxEms} EMs for complex apps
+- This is MANDATORY - parallelization is critical for timely delivery
 
 **Understanding the Issue:**
 - This issue may contain test failures in various formats (Rust cargo, Jest, pytest, etc.)
@@ -1442,7 +1458,13 @@ ${this.state.issue.body}
      * Build the prompt for a worker task
      */
     buildWorkerPrompt(worker) {
-        return `You are a developer implementing a specific task. Make the actual code changes.
+        return `⚠️ **WARNING: YOU MUST WRITE COMPLETE, PRODUCTION-READY CODE** ⚠️
+
+Many workers have failed by only creating skeleton files. YOU WILL BE EVALUATED ON:
+1. Writing FULL implementation code, not just types or interfaces
+2. Creating WORKING features with actual logic
+3. Including proper error handling, validation, and edge cases
+4. Writing PRODUCTION-QUALITY code, not placeholder stubs
 
 **Your Task:** ${worker.task}
 
@@ -1468,18 +1490,21 @@ ${this.state?.issue.body || ''}
 - Any SUMMARY.md or documentation files
 - README.md (unless specifically asked)
 - Empty skeleton files with no actual implementation
+- Files with just "export const xyz = () => TODO" or similar placeholders
+- Type-only files with no actual logic implementation
 
 **Example of GOOD implementation:**
 - A React component with full JSX, props, hooks, event handlers, and styling
 - An API route with validation, error handling, database queries, and responses
 - A utility function with full logic, edge case handling, and proper types
 
-**Example of BAD implementation:**
+**Example of BAD implementation (DO NOT DO THIS):**
 - A component with just "export const Component = () => <div>TODO</div>;"
 - An API route with just "export async function GET() { return Response.json({}); }"
 - Type-only files with no actual logic
+- Files with placeholder comments like "// TODO: implement this"
 
-Implement this task now with COMPLETE, PRODUCTION-READY code.`;
+Implement this task now with COMPLETE, PRODUCTION-READY code. Every file must have actual working code.`;
     }
     /**
      * Start the next pending worker for an EM (legacy sequential mode)
@@ -1503,7 +1528,13 @@ Implement this task now with COMPLETE, PRODUCTION-READY code.`;
             pendingWorker.startedAt = new Date().toISOString();
             await saveState(this.state);
             // Execute worker task
-            const prompt = `You are a developer implementing a specific task. Make the actual code changes.
+            const prompt = `⚠️ **WARNING: YOU MUST WRITE COMPLETE, PRODUCTION-READY CODE** ⚠️
+
+Many workers have failed by only creating skeleton files. YOU WILL BE EVALUATED ON:
+1. Writing FULL implementation code, not just types or interfaces
+2. Creating WORKING features with actual logic
+3. Including proper error handling, validation, and edge cases
+4. Writing PRODUCTION-QUALITY code, not placeholder stubs
 
 **Your Task:** ${pendingWorker.task}
 
@@ -1535,16 +1566,19 @@ ${this.state.issue.body}
 - Any SUMMARY.md or documentation files
 - README.md (unless specifically asked)
 - Empty skeleton files with no actual implementation
+- Files with just "export const xyz = () => TODO" or similar placeholders
+- Type-only files with no actual logic implementation
 
 **Example of GOOD implementation:**
 - A React component with full JSX, props, hooks, event handlers, and styling
 - An API route with validation, error handling, database queries, and responses
 - A utility function with full logic, edge case handling, and proper types
 
-**Example of BAD implementation:**
+**Example of BAD implementation (DO NOT DO THIS):**
 - A component with just "export const Component = () => <div>TODO</div>;"
 - An API route with just "export async function GET() { return Response.json({}); }"
 - Type-only files with no actual logic
+- Files with placeholder comments like "// TODO: implement this"
 
 **If this is a setup task, create files in THIS ORDER:**
 1. .gitignore FIRST (must include: node_modules, .next, .env*, dist)
@@ -1553,7 +1587,7 @@ ${this.state.issue.body}
 4. .github/workflows/ci.yml with lint, typecheck, test, and build jobs (CRITICAL for auto-merge!)
 5. Other config files as needed
 
-Implement this task now with COMPLETE, PRODUCTION-READY code.`;
+Implement this task now with COMPLETE, PRODUCTION-READY code. Every file must have actual working code.`;
             const result = await this.sdkRunner.executeTask(prompt);
             if (!result.success) {
                 // Mark worker as failed but continue with others
