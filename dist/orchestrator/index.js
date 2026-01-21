@@ -1914,20 +1914,20 @@ Closes #${this.state.issue.number}
      */
     async handlePRMerged(event) {
         if (!event.prNumber || !event.branch) {
-            console.log('PR merged event missing prNumber or branch');
+            console.error('PR merged event: missing prNumber or branch');
             return;
         }
         // Find work branch from PR branch name
         const workBranch = await this.findWorkBranchFromPRBranch(event.branch);
         if (!workBranch) {
-            console.log('Could not find work branch for merged PR');
-            return;
+            console.error(`PR merged event: could not find work branch for PR branch ${event.branch}`);
+            throw new Error(`Failed to find work branch for merged PR #${event.prNumber}`);
         }
         // Load state
         this.state = await this.loadStateFromWorkBranch(workBranch);
         if (!this.state) {
-            console.log('No state found for work branch');
-            return;
+            console.error(`PR merged event: could not load state from work branch ${workBranch}`);
+            throw new Error(`Failed to load state for merged PR #${event.prNumber}`);
         }
         // Check if this is the final PR being merged
         if (this.state.finalPr?.number === event.prNumber) {
@@ -2209,12 +2209,16 @@ Closes #${this.state.issue.number}
         }
         // Find work branch
         const workBranch = await this.findWorkBranchFromPRBranch(event.branch);
-        if (!workBranch)
-            return;
+        if (!workBranch) {
+            console.error(`PR review event: could not find work branch for PR branch ${event.branch}`);
+            throw new Error(`Failed to find work branch for PR branch ${event.branch}. Check branch naming pattern.`);
+        }
         // Load state
         this.state = await this.loadStateFromWorkBranch(workBranch);
-        if (!this.state)
-            return;
+        if (!this.state) {
+            console.error(`PR review event: could not load state from work branch ${workBranch}`);
+            throw new Error(`Failed to load state from work branch ${workBranch}. State file may be missing or corrupted.`);
+        }
         // Check if this is the final PR
         if (this.state.finalPr?.number === event.prNumber) {
             console.log('Addressing review on final PR');

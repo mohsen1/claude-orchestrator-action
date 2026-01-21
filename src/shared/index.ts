@@ -5,3 +5,4 @@ export * from './github.js';
 export * from './claude.js';
 export * from './git.js';
 export * from './json.js';
+export * from './labels.js';
