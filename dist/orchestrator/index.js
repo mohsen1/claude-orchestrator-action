@@ -898,8 +898,27 @@ ${this.state.issue.body}
 - Focus on the root cause - multiple tests may fail for the same reason
 - Estimated workers should be proportional to: (number of failing tests in group) / 10
 
+**For Web App Projects (Next.js, React, Vue, etc.):**
+- These are COMPLEX tasks requiring MANY EMs with multiple workers each
+- Break down into: Setup, Data Layer, Authentication, API Routes, UI Components, Pages, Real-time/Features, Testing
+- Example breakdown for a full-stack app:
+  - EM-0: Project Setup (gitignore, package.json, tsconfig, .github/workflows/ci.yml, shared types)
+  - EM-1: Data Layer (DB schema, models, migrations, repositories)
+  - EM-2: Authentication (auth provider, login/signup, middleware, session management)
+  - EM-3: API Routes (endpoint handlers, validation, business logic)
+  - EM-4: UI Components (reusable components, forms, layouts)
+  - EM-5: Pages/Views (route handlers, page components, data fetching)
+  - EM-6: Additional Features (real-time, file uploads, notifications, etc.)
+- USE ALL ${maxEms} EMs for substantial web apps - parallelization is critical!
+
+**For CI/CD Requirements:**
+- EVERY new project MUST include a CI workflow file (.github/workflows/ci.yml or similar)
+- The CI workflow MUST include: lint, typecheck, test, and build jobs
+- This is CRITICAL for auto-merge to work - PRs need passing checks to merge
+- Project Setup EM MUST create the CI workflow file as one of its first tasks
+
 **Your task:**
-1. First, determine if this project needs initial setup (gitignore, package.json, tsconfig, etc.)
+1. First, determine if this project needs initial setup (gitignore, package.json, tsconfig, CI workflow, etc.)
 2. Break this issue down into EM (Engineering Manager) tasks. Each EM focuses on a distinct area.
 3. Provide a brief summary for the PR description.
 
@@ -915,7 +934,7 @@ ${this.state.issue.body}
 
 **Important Guidelines:**
 - If this is a new project, include a "Project Setup" EM (id: 0) that runs FIRST
-- Project Setup EM should create ALL setup files: .gitignore, package.json, tsconfig.json, AND shared types
+- Project Setup EM should create ALL setup files: .gitignore, package.json, tsconfig.json, .github/workflows/ci.yml, AND shared types
 - NO other EM should create setup files - they assume setup is done
 - Other EMs IMPORT from setup-created files, never modify them
 
@@ -923,8 +942,8 @@ ${this.state.issue.body}
 - You have up to ${maxEms} EMs available (not counting setup)
 - Each EM can have up to ${maxWorkersPerEm} Workers
 - For SIMPLE tasks (1-2 features): Use 1-2 EMs with 1-2 workers each
-- For MEDIUM tasks (3-5 features): Use 2-3 EMs with 2-3 workers each  
-- For COMPLEX tasks (many features, multiple layers): USE ALL ${maxEms} EMs with ${maxWorkersPerEm} workers each
+- For MEDIUM tasks (3-5 features): Use 3-5 EMs with 2-3 workers each
+- For COMPLEX tasks (web apps, many features, multiple layers): USE ALL ${maxEms} EMs with ${maxWorkersPerEm} workers each
 - More workers = faster completion but ensure non-overlapping work
 - When in doubt, USE MORE workers - parallelization speeds up delivery
 
@@ -1055,8 +1074,27 @@ ${this.state.issue.body}
 - Focus on the root cause - multiple tests may fail for the same reason
 - Estimated workers should be proportional to: (number of failing tests in group) / 10
 
+**For Web App Projects (Next.js, React, Vue, etc.):**
+- These are COMPLEX tasks requiring MANY EMs with multiple workers each
+- Break down into: Setup, Data Layer, Authentication, API Routes, UI Components, Pages, Real-time/Features, Testing
+- Example breakdown for a full-stack app:
+  - EM-0: Project Setup (gitignore, package.json, tsconfig, .github/workflows/ci.yml, shared types)
+  - EM-1: Data Layer (DB schema, models, migrations, repositories)
+  - EM-2: Authentication (auth provider, login/signup, middleware, session management)
+  - EM-3: API Routes (endpoint handlers, validation, business logic)
+  - EM-4: UI Components (reusable components, forms, layouts)
+  - EM-5: Pages/Views (route handlers, page components, data fetching)
+  - EM-6: Additional Features (real-time, file uploads, notifications, etc.)
+- USE ALL ${maxEms} EMs for substantial web apps - parallelization is critical!
+
+**For CI/CD Requirements:**
+- EVERY new project MUST include a CI workflow file (.github/workflows/ci.yml or similar)
+- The CI workflow MUST include: lint, typecheck, test, and build jobs
+- This is CRITICAL for auto-merge to work - PRs need passing checks to merge
+- Project Setup EM MUST create the CI workflow file as one of its first tasks
+
 **Your task:**
-1. First, determine if this project needs initial setup (gitignore, package.json, tsconfig, etc.)
+1. First, determine if this project needs initial setup (gitignore, package.json, tsconfig, CI workflow, etc.)
 2. Break this issue down into EM (Engineering Manager) tasks. Each EM focuses on a distinct area.
 3. Provide a brief summary for the PR description.
 
@@ -1072,7 +1110,7 @@ ${this.state.issue.body}
 
 **Important Guidelines:**
 - If this is a new project, include a "Project Setup" EM (id: 0) that runs FIRST
-- Project Setup EM should create ALL setup files: .gitignore, package.json, tsconfig.json, AND shared types
+- Project Setup EM should create ALL setup files: .gitignore, package.json, tsconfig.json, .github/workflows/ci.yml, AND shared types
 - NO other EM should create setup files - they assume setup is done
 - Other EMs IMPORT from setup-created files, never modify them
 
@@ -1080,8 +1118,8 @@ ${this.state.issue.body}
 - You have up to ${maxEms} EMs available (not counting setup)
 - Each EM can have up to ${maxWorkersPerEm} Workers
 - For SIMPLE tasks (1-2 features): Use 1-2 EMs with 1-2 workers each
-- For MEDIUM tasks (3-5 features): Use 2-3 EMs with 2-3 workers each  
-- For COMPLEX tasks (many features, multiple layers): USE ALL ${maxEms} EMs with ${maxWorkersPerEm} workers each
+- For MEDIUM tasks (3-5 features): Use 3-5 EMs with 2-3 workers each
+- For COMPLEX tasks (web apps, many features, multiple layers): USE ALL ${maxEms} EMs with ${maxWorkersPerEm} workers each
 - More workers = faster completion but ensure non-overlapping work
 - When in doubt, USE MORE workers - parallelization speeds up delivery
 
@@ -1418,13 +1456,30 @@ ${this.state?.issue.body || ''}
 2. NEVER run "npm install" - only create config files
 3. Implement the task completely with clean, production-ready code
 4. Include necessary imports and exports
+5. **WRITE COMPLETE IMPLEMENTATION CODE** - Not just skeleton or stub files!
+6. Include actual logic, error handling, validation, and production-quality code
+7. For UI components: Include full component code with props, state, and styling
+8. For API routes: Include full request handling, validation, and responses
+9. For pages/views: Include complete page logic, not just empty shells
+10. For utilities/libraries: Include full implementation, not just type definitions
 
 **DO NOT create:**
 - node_modules/ directory
 - Any SUMMARY.md or documentation files
 - README.md (unless specifically asked)
+- Empty skeleton files with no actual implementation
 
-Implement this task now.`;
+**Example of GOOD implementation:**
+- A React component with full JSX, props, hooks, event handlers, and styling
+- An API route with validation, error handling, database queries, and responses
+- A utility function with full logic, edge case handling, and proper types
+
+**Example of BAD implementation:**
+- A component with just "export const Component = () => <div>TODO</div>;"
+- An API route with just "export async function GET() { return Response.json({}); }"
+- Type-only files with no actual logic
+
+Implement this task now with COMPLETE, PRODUCTION-READY code.`;
     }
     /**
      * Start the next pending worker for an EM (legacy sequential mode)
@@ -1462,6 +1517,12 @@ ${this.state.issue.body}
 2. NEVER run "npm install" - only create config files
 3. Implement the task completely with clean, production-ready code
 4. Include necessary imports and exports
+5. **WRITE COMPLETE IMPLEMENTATION CODE** - Not just skeleton or stub files!
+6. Include actual logic, error handling, validation, and production-quality code
+7. For UI components: Include full component code with props, state, and styling
+8. For API routes: Include full request handling, validation, and responses
+9. For pages/views: Include complete page logic, not just empty shells
+10. For utilities/libraries: Include full implementation, not just type definitions
 
 **ABSOLUTE RULES:**
 - Create files in the ROOT directory, NOT inside any subdirectory
@@ -1473,14 +1534,26 @@ ${this.state.issue.body}
 - node_modules/ directory
 - Any SUMMARY.md or documentation files
 - README.md (unless specifically asked)
+- Empty skeleton files with no actual implementation
+
+**Example of GOOD implementation:**
+- A React component with full JSX, props, hooks, event handlers, and styling
+- An API route with validation, error handling, database queries, and responses
+- A utility function with full logic, edge case handling, and proper types
+
+**Example of BAD implementation:**
+- A component with just "export const Component = () => <div>TODO</div>;"
+- An API route with just "export async function GET() { return Response.json({}); }"
+- Type-only files with no actual logic
 
 **If this is a setup task, create files in THIS ORDER:**
 1. .gitignore FIRST (must include: node_modules, .next, .env*, dist)
 2. package.json with dependencies
 3. tsconfig.json for TypeScript
-4. Other config files as needed
+4. .github/workflows/ci.yml with lint, typecheck, test, and build jobs (CRITICAL for auto-merge!)
+5. Other config files as needed
 
-Implement this task now.`;
+Implement this task now with COMPLETE, PRODUCTION-READY code.`;
             const result = await this.sdkRunner.executeTask(prompt);
             if (!result.success) {
                 // Mark worker as failed but continue with others
