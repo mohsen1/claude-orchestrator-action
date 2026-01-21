@@ -2557,22 +2557,32 @@ Closes #${this.state.issue.number}
    */
   private async maybeAutoMergePR(prNumber: number): Promise<void> {
     try {
+      console.log(`Checking if PR #${prNumber} is ready to merge...`);
       const ready = await this.isPRReadyToMerge(prNumber);
-      if (!ready) return;
+      if (!ready) {
+        console.log(`PR #${prNumber} is not ready to merge (still waiting for reviews)`);
+        return;
+      }
 
+      console.log(`PR #${prNumber} is review-clean, marking as ready to merge`);
       await this.github.setStatusLabel(prNumber, STATUS_LABELS.READY_TO_MERGE);
 
       // Try merge (may fail due to checks/permissions/branch protection)
+      console.log(`Attempting to merge PR #${prNumber}...`);
       const result = await this.github.mergePullRequest(prNumber);
       if (result.merged) {
+        console.log(`PR #${prNumber} merged successfully!`);
         await this.github.setStatusLabel(prNumber, STATUS_LABELS.MERGED);
       } else if (result.error) {
         console.warn(`PR #${prNumber} not merged: ${result.error}`);
         // Keep as awaiting review so future events can retry
         await this.github.setStatusLabel(prNumber, STATUS_LABELS.AWAITING_REVIEW);
+      } else if (result.alreadyMerged) {
+        console.log(`PR #${prNumber} was already merged`);
       }
     } catch (err) {
-      console.warn(`Auto-merge attempt failed for PR #${prNumber}: ${(err as Error).message}`);
+      console.error(`Auto-merge attempt failed for PR #${prNumber}: ${(err as Error).message}`);
+      console.error(err);
       // Do not throw from auto-merge; it's best-effort
     }
   }

@@ -419,32 +419,46 @@ export class GitHubClient {
       const mergeOptions: Parameters<typeof this.octokit.rest.pulls.merge>[0] = {
         owner: this.getRepo().owner,
         repo: this.getRepo().repo,
-        pull_number: prNumber
+        pull_number: prNumber,
+        merge_method: 'squash'
       };
-      
+
       if (commitTitle) {
         mergeOptions.commit_title = commitTitle;
       }
       if (commitMessage) {
         mergeOptions.commit_message = commitMessage;
       }
-      
+
+      console.log(`Attempting to merge PR #${prNumber} with method: squash`);
       await this.octokit.rest.pulls.merge(mergeOptions);
+      console.log(`PR #${prNumber} merged successfully`);
       return { merged: true, alreadyMerged: false };
     } catch (error) {
-      const message = (error as Error).message;
+      const err = error as any;
+      const message = err.message || String(error);
+      const status = err.status;
+      const documentationUrl = err.documentation_url;
+
+      console.error(`PR #${prNumber} merge failed: status=${status}, message=${message}`);
+
       // Check if it's a non-fatal merge error
-      if (message.includes('not mergeable') || message.includes('405')) {
+      if (message.includes('not mergeable') || message.includes('405') || status === 405) {
         console.warn(`PR #${prNumber} is not mergeable (likely conflicts): ${message}`);
         return { merged: false, alreadyMerged: false, error: 'Not mergeable - conflicts' };
       }
-      if (message.includes('Base branch was modified')) {
+      if (message.includes('Base branch was modified') || message.includes('merge conflict')) {
         console.warn(`PR #${prNumber} base branch was modified, needs update: ${message}`);
         return { merged: false, alreadyMerged: false, error: 'Base branch modified - needs update' };
       }
       if (message.includes('Head branch was modified')) {
         console.warn(`PR #${prNumber} head branch was modified: ${message}`);
         return { merged: false, alreadyMerged: false, error: 'Head branch modified' };
+      }
+      // Handle status check failures
+      if (message.includes('Required status check') || status === 405 || documentationUrl?.includes('status')) {
+        console.warn(`PR #${prNumber} failing status checks: ${message}`);
+        return { merged: false, alreadyMerged: false, error: 'Failing status checks' };
       }
       throw new Error(
         `Failed to merge PR #${prNumber}: ${message}`
