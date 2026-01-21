@@ -189,8 +189,14 @@ export declare class EventDrivenOrchestrator {
      */
     private getUnaddressedRootReviewCommentIds;
     /**
+     * Check if a PR has a Copilot review and is ready to merge
+     * Copilot COMMENTED reviews are considered ready to merge (no approval needed)
+     */
+    private hasCopilotCommentedReview;
+    /**
      * Determine whether a PR is ready to merge based on review state and unaddressed comments.
      * We intentionally do NOT require \"APPROVED\" to support Copilot COMMENTED reviews.
+     * For Copilot COMMENTED reviews, we don't require all review comments to be addressed.
      */
     private isPRReadyToMerge;
     /**

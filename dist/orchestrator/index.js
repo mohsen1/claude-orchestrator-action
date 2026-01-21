@@ -2057,13 +2057,31 @@ Closes #${this.state.issue.number}
         return unaddressed;
     }
     /**
+     * Check if a PR has a Copilot review and is ready to merge
+     * Copilot COMMENTED reviews are considered ready to merge (no approval needed)
+     */
+    async hasCopilotCommentedReview(prNumber) {
+        const reviews = await this.github.getPullRequestReviews(prNumber);
+        return reviews.some(r => r.state.toLowerCase() === 'commented' &&
+            r.user?.toLowerCase().includes('copilot'));
+    }
+    /**
      * Determine whether a PR is ready to merge based on review state and unaddressed comments.
      * We intentionally do NOT require \"APPROVED\" to support Copilot COMMENTED reviews.
+     * For Copilot COMMENTED reviews, we don't require all review comments to be addressed.
      */
     async isPRReadyToMerge(prNumber) {
         const reviews = await this.github.getPullRequestReviews(prNumber);
         if (reviews.some(r => r.state === 'CHANGES_REQUESTED')) {
             return false;
+        }
+        // Special handling for Copilot COMMENTED reviews:
+        // If there's a Copilot COMMENTED review and no CHANGES_REQUESTED, the PR is ready to merge
+        // We don't require addressing Copilot's overview/commentary comments
+        const hasCopilotCommented = await this.hasCopilotCommentedReview(prNumber);
+        if (hasCopilotCommented) {
+            console.log(`PR #${prNumber} has Copilot COMMENTED review - considering ready to merge`);
+            return true;
         }
         const unaddressed = await this.getUnaddressedRootReviewCommentIds(prNumber);
         return unaddressed.length === 0;
