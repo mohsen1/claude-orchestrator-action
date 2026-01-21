@@ -2283,6 +2283,7 @@ Closes #${this.state.issue.number}
         // Fetch review details from API if not provided (for Copilot reviews)
         let reviewState = event.reviewState;
         let reviewBody = event.reviewBody || '';
+        let isCopilotCommented = false;
         if (!reviewState || !reviewBody) {
             try {
                 const reviews = await this.github.getPullRequestReviews(event.prNumber);
@@ -2290,6 +2291,9 @@ Closes #${this.state.issue.number}
                 if (latestReview) {
                     reviewState = latestReview.state.toLowerCase();
                     reviewBody = latestReview.body || '';
+                    // Check if this is a Copilot COMMENTED review
+                    isCopilotCommented = reviewState === 'commented' &&
+                        latestReview.user.toLowerCase().includes('copilot');
                 }
             }
             catch (err) {
@@ -2299,6 +2303,24 @@ Closes #${this.state.issue.number}
         // Only act on changes_requested or commented (for Copilot reviews with comments)
         if (reviewState !== 'changes_requested' && reviewState !== 'commented') {
             console.log(`PR review event: state is ${reviewState}, no action needed`);
+            return;
+        }
+        // For Copilot COMMENTED reviews, skip addressing and go straight to auto-merge
+        if (isCopilotCommented) {
+            console.log(`PR review event: Copilot COMMENTED review detected - attempting auto-merge`);
+            // Find work branch and load state
+            const workBranch = await this.findWorkBranchFromPRBranch(event.branch);
+            if (!workBranch) {
+                console.error(`PR review event: could not find work branch for PR branch ${event.branch}`);
+                return;
+            }
+            this.state = await this.loadStateFromWorkBranch(workBranch);
+            if (!this.state) {
+                console.error(`PR review event: could not load state from work branch ${workBranch}`);
+                return;
+            }
+            // Try to auto-merge immediately for Copilot COMMENTED reviews
+            await this.maybeAutoMergePR(event.prNumber);
             return;
         }
         // For 'commented' reviews, check if there's actual actionable feedback
