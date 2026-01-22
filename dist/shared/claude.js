@@ -73,6 +73,10 @@ export class ClaudeCodeRunner {
             };
         }
         catch (error) {
+            // Re-throw RateLimitError so retry logic can handle it
+            if (error instanceof RateLimitError) {
+                throw error;
+            }
             const errorMessage = error.message;
             console.error('Claude CLI execution error:', errorMessage);
             // Check if it's a timeout error
@@ -189,6 +193,10 @@ export class ClaudeCodeRunner {
             };
         }
         catch (error) {
+            // Re-throw RateLimitError so retry logic can handle it
+            if (error instanceof RateLimitError) {
+                throw error;
+            }
             return {
                 success: false,
                 stdout: '',

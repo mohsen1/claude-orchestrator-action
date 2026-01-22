@@ -117,6 +117,11 @@ export class ClaudeCodeRunner {
         exitCode: result.exitCode ?? null
       };
     } catch (error) {
+      // Re-throw RateLimitError so retry logic can handle it
+      if (error instanceof RateLimitError) {
+        throw error;
+      }
+
       const errorMessage = (error as Error).message;
       console.error('Claude CLI execution error:', errorMessage);
 
@@ -250,6 +255,11 @@ export class ClaudeCodeRunner {
         exitCode: result.exitCode ?? null
       };
     } catch (error) {
+      // Re-throw RateLimitError so retry logic can handle it
+      if (error instanceof RateLimitError) {
+        throw error;
+      }
+
       return {
         success: false,
         stdout: '',
