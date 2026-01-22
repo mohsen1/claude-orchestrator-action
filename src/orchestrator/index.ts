@@ -2527,6 +2527,27 @@ Closes #${this.state.issue.number}
 
     await saveState(this.state);
 
+    // CRITICAL: After setup EM (id=0) merges, activate pending EMs
+    if (mergedEM && mergedEM.id === 0 && this.state.pendingEMs && this.state.pendingEMs.length > 0) {
+      console.log(`Setup EM-0 merged. Activating ${this.state.pendingEMs.length} pending EMs...`);
+
+      // Add pending EMs to active list
+      if (this.state.ems) {
+        this.state.ems.push(...this.state.pendingEMs);
+      }
+      this.state.pendingEMs = [];
+
+      await this.setPhase('em_assignment');
+      await saveState(this.state, `chore: setup complete, starting ${this.state.ems ? this.state.ems.length - 1 : 0} EMs in PARALLEL`);
+      await this.updateProgressComment();
+
+      // Start all pending EMs in parallel
+      const pendingCount = this.state.ems ? this.state.ems.filter(e => e.status === 'pending').length : 0;
+      console.log(`\n=== Starting ${pendingCount} EMs in PARALLEL ===`);
+      await this.startAllPendingEMs();
+      return;
+    }
+
     // Proactively check for reviews on other worker PRs before proceeding
     await this.checkAndAddressReviews();
 
