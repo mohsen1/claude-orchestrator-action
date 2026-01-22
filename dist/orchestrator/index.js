@@ -931,6 +931,13 @@ If this is a web application (Next.js, React, Vue, Angular, Svelte, etc.) with m
 - USE ALL available ${maxEms} EMs for complex apps
 - This is MANDATORY - parallelization is critical for timely delivery
 
+**CRITICAL FOR PROJECT SETUP PHASE:**
+If needs_setup is true (project setup required):
+- Create a SINGLE setup worker (estimated_workers: 1) to do ALL setup
+- The setup worker will create: gitignore, package.json, tsconfig.json, .github/workflows/ci.yml, shared types, ESLint config, Tailwind config, Docker config, etc.
+- DO NOT split setup work into multiple workers - this causes merge conflicts
+- After setup completes, then create multiple EMs for feature work with multiple workers each
+
 **Understanding the Issue:**
 - This issue may contain test failures in various formats (Rust cargo, Jest, pytest, etc.)
 - Test names with timestamps like \`2026-01-20T13:03:40.5487877Z\` are Rust cargo test output
@@ -1114,6 +1121,13 @@ If this is a web application (Next.js, React, Vue, Angular, Svelte, etc.) with m
 - Break down by architectural layers: Setup, Data, Auth, API, UI Components, Pages, Features
 - USE ALL available ${maxEms} EMs for complex apps
 - This is MANDATORY - parallelization is critical for timely delivery
+
+**CRITICAL FOR PROJECT SETUP PHASE:**
+If needs_setup is true (project setup required):
+- Create a SINGLE setup worker (estimated_workers: 1) to do ALL setup
+- The setup worker will create: gitignore, package.json, tsconfig.json, .github/workflows/ci.yml, shared types, ESLint config, Tailwind config, Docker config, etc.
+- DO NOT split setup work into multiple workers - this causes merge conflicts
+- After setup completes, then create multiple EMs for feature work with multiple workers each
 
 **Understanding the Issue:**
 - This issue may contain test failures in various formats (Rust cargo, Jest, pytest, etc.)
