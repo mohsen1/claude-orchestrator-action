@@ -943,12 +943,13 @@ If needs_setup is true (project setup required):
   - Editor: VS Code settings (optional)
   - Type definitions: src/types/ directory with core interfaces/types ONLY
   - Documentation: README.md with setup instructions
-- CRITICAL: The setup worker MUST NOT create any implementation code:
-  - NO database schemas, models, or migrations (src/db/, src/models/, prisma/, drizzle/)
-  - NO API routes or handlers (src/app/api/, src/routes/, src/api/)
-  - NO UI components or pages (src/components/, src/app/**/*.tsx, src/pages/)
-  - NO business logic, services, or utilities (src/lib/, src/utils/, src/services/, src/hooks/)
-  - NO feature implementation of any kind
+- CRITICAL: The setup worker MUST NOT create ANY src/ directory files except src/types/:
+  - NO files in src/db/ directory (no schema.ts, no migrations, no database code)
+  - NO files in src/lib/ directory (no utils, no helpers, no services)
+  - NO files in src/models/, src/services/, src/hooks/, src/utils/
+  - NO files in src/app/ directory except maybe a placeholder (no pages, no API routes, no components)
+  - NO files in src/components/ directory
+  - Absolutely NO implementation code of any kind in src/
 - Leave ALL feature implementation to the subsequent EMs
 - DO NOT split setup work into multiple workers - this causes merge conflicts
 - After setup completes, then create multiple EMs for feature work with multiple workers each
@@ -1149,12 +1150,13 @@ If needs_setup is true (project setup required):
   - Editor: VS Code settings (optional)
   - Type definitions: src/types/ directory with core interfaces/types ONLY
   - Documentation: README.md with setup instructions
-- CRITICAL: The setup worker MUST NOT create any implementation code:
-  - NO database schemas, models, or migrations (src/db/, src/models/, prisma/, drizzle/)
-  - NO API routes or handlers (src/app/api/, src/routes/, src/api/)
-  - NO UI components or pages (src/components/, src/app/**/*.tsx, src/pages/)
-  - NO business logic, services, or utilities (src/lib/, src/utils/, src/services/, src/hooks/)
-  - NO feature implementation of any kind
+- CRITICAL: The setup worker MUST NOT create ANY src/ directory files except src/types/:
+  - NO files in src/db/ directory (no schema.ts, no migrations, no database code)
+  - NO files in src/lib/ directory (no utils, no helpers, no services)
+  - NO files in src/models/, src/services/, src/hooks/, src/utils/
+  - NO files in src/app/ directory except maybe a placeholder (no pages, no API routes, no components)
+  - NO files in src/components/ directory
+  - Absolutely NO implementation code of any kind in src/
 - Leave ALL feature implementation to the subsequent EMs
 - DO NOT split setup work into multiple workers - this causes merge conflicts
 - After setup completes, then create multiple EMs for feature work with multiple workers each
@@ -1555,11 +1557,13 @@ ${isSetupEM
 
 ⚠️ **YOU ARE A SETUP WORKER - CONFIG FILES ONLY** ⚠️
 Your task is PROJECT SETUP only. DO NOT create any feature implementation code:
-- NO database schemas, models, or migrations
-- NO API routes or handlers
-- NO UI components or pages
-- NO business logic, services, utilities, or helpers
-- Create ONLY configuration files, types, and infrastructure
+- NO files in src/db/ directory (no schema.ts, no database code at all)
+- NO files in src/lib/ directory (no utils, helpers, or services)
+- NO files in src/app/ directory (no pages, no API routes, no components)
+- NO files in src/components/ directory (no UI components)
+- NO files in src/models/, src/services/, src/hooks/, src/utils/
+- ABSOLUTELY NOTHING in src/ EXCEPT src/types/ for type definitions only
+Create ONLY configuration files in the root directory (.gitignore, package.json, tsconfig.json, etc.)
 ` : '';
         return `⚠️ **WARNING: YOU MUST WRITE COMPLETE, PRODUCTION-READY CODE** ⚠️
 
