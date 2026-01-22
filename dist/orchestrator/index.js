@@ -696,7 +696,7 @@ ${emTable}${finalPRSection}${errorSection}
             await GitOperations.checkout(worker.branch);
             await GitOperations.pull(worker.branch);
             // Execute worker task using SDK
-            const prompt = this.buildWorkerPrompt(worker);
+            const prompt = this.buildWorkerPrompt(worker, em);
             const result = await this.sdkRunner.executeTask(prompt);
             if (!result.success) {
                 worker.status = 'failed';
@@ -933,8 +933,23 @@ If this is a web application (Next.js, React, Vue, Angular, Svelte, etc.) with m
 
 **CRITICAL FOR PROJECT SETUP PHASE:**
 If needs_setup is true (project setup required):
-- Create a SINGLE setup worker (estimated_workers: 1) to do ALL setup
-- The setup worker will create: gitignore, package.json, tsconfig.json, .github/workflows/ci.yml, shared types, ESLint config, Tailwind config, Docker config, etc.
+- Create a SINGLE setup worker (estimated_workers: 1) to do ONLY project setup
+- The setup worker will create ONLY project configuration and infrastructure files:
+  - Project config: .gitignore, package.json, tsconfig.json, build tool configs (next.config.js, vite.config.ts, etc.)
+  - Tooling config: ESLint, Prettier, TypeScript configs
+  - CI/CD: .github/workflows/ci.yml or similar (with lint, typecheck, test, build jobs)
+  - Environment: .env.example
+  - Container: Dockerfile, docker-compose.yml (if needed)
+  - Editor: VS Code settings (optional)
+  - Type definitions: src/types/ directory with core interfaces/types ONLY
+  - Documentation: README.md with setup instructions
+- CRITICAL: The setup worker MUST NOT create any implementation code:
+  - NO database schemas, models, or migrations (src/db/, src/models/, prisma/, drizzle/)
+  - NO API routes or handlers (src/app/api/, src/routes/, src/api/)
+  - NO UI components or pages (src/components/, src/app/**/*.tsx, src/pages/)
+  - NO business logic, services, or utilities (src/lib/, src/utils/, src/services/, src/hooks/)
+  - NO feature implementation of any kind
+- Leave ALL feature implementation to the subsequent EMs
 - DO NOT split setup work into multiple workers - this causes merge conflicts
 - After setup completes, then create multiple EMs for feature work with multiple workers each
 
@@ -956,7 +971,7 @@ If needs_setup is true (project setup required):
 - These are COMPLEX tasks requiring MANY EMs with multiple workers each
 - Break down into: Setup, Data Layer, Authentication, API Routes, UI Components, Pages, Real-time/Features, Testing
 - Example breakdown for a full-stack app:
-  - EM-0: Project Setup (gitignore, package.json, tsconfig, .github/workflows/ci.yml, shared types)
+  - EM-0: Project Setup ONLY (config files, types, CI/CD - NO implementation code)
   - EM-1: Data Layer (DB schema, models, migrations, repositories)
   - EM-2: Authentication (auth provider, login/signup, middleware, session management)
   - EM-3: API Routes (endpoint handlers, validation, business logic)
@@ -1124,8 +1139,23 @@ If this is a web application (Next.js, React, Vue, Angular, Svelte, etc.) with m
 
 **CRITICAL FOR PROJECT SETUP PHASE:**
 If needs_setup is true (project setup required):
-- Create a SINGLE setup worker (estimated_workers: 1) to do ALL setup
-- The setup worker will create: gitignore, package.json, tsconfig.json, .github/workflows/ci.yml, shared types, ESLint config, Tailwind config, Docker config, etc.
+- Create a SINGLE setup worker (estimated_workers: 1) to do ONLY project setup
+- The setup worker will create ONLY project configuration and infrastructure files:
+  - Project config: .gitignore, package.json, tsconfig.json, build tool configs (next.config.js, vite.config.ts, etc.)
+  - Tooling config: ESLint, Prettier, TypeScript configs
+  - CI/CD: .github/workflows/ci.yml or similar (with lint, typecheck, test, build jobs)
+  - Environment: .env.example
+  - Container: Dockerfile, docker-compose.yml (if needed)
+  - Editor: VS Code settings (optional)
+  - Type definitions: src/types/ directory with core interfaces/types ONLY
+  - Documentation: README.md with setup instructions
+- CRITICAL: The setup worker MUST NOT create any implementation code:
+  - NO database schemas, models, or migrations (src/db/, src/models/, prisma/, drizzle/)
+  - NO API routes or handlers (src/app/api/, src/routes/, src/api/)
+  - NO UI components or pages (src/components/, src/app/**/*.tsx, src/pages/)
+  - NO business logic, services, or utilities (src/lib/, src/utils/, src/services/, src/hooks/)
+  - NO feature implementation of any kind
+- Leave ALL feature implementation to the subsequent EMs
 - DO NOT split setup work into multiple workers - this causes merge conflicts
 - After setup completes, then create multiple EMs for feature work with multiple workers each
 
@@ -1147,7 +1177,7 @@ If needs_setup is true (project setup required):
 - These are COMPLEX tasks requiring MANY EMs with multiple workers each
 - Break down into: Setup, Data Layer, Authentication, API Routes, UI Components, Pages, Real-time/Features, Testing
 - Example breakdown for a full-stack app:
-  - EM-0: Project Setup (gitignore, package.json, tsconfig, .github/workflows/ci.yml, shared types)
+  - EM-0: Project Setup ONLY (config files, types, CI/CD - NO implementation code)
   - EM-1: Data Layer (DB schema, models, migrations, repositories)
   - EM-2: Authentication (auth provider, login/signup, middleware, session management)
   - EM-3: API Routes (endpoint handlers, validation, business logic)
@@ -1474,7 +1504,7 @@ ${isSetupEM
             worker.status = 'in_progress';
             worker.startedAt = new Date().toISOString();
             // Execute worker task using SDK (works in any directory)
-            const prompt = this.buildWorkerPrompt(worker);
+            const prompt = this.buildWorkerPrompt(worker, em);
             const result = await this.sdkRunner.executeTask(prompt);
             if (!result.success) {
                 worker.status = 'failed';
@@ -1519,7 +1549,18 @@ ${isSetupEM
     /**
      * Build the prompt for a worker task
      */
-    buildWorkerPrompt(worker) {
+    buildWorkerPrompt(worker, em) {
+        const isSetupWorker = em?.id === 0;
+        const setupWarning = isSetupWorker ? `
+
+⚠️ **YOU ARE A SETUP WORKER - CONFIG FILES ONLY** ⚠️
+Your task is PROJECT SETUP only. DO NOT create any feature implementation code:
+- NO database schemas, models, or migrations
+- NO API routes or handlers
+- NO UI components or pages
+- NO business logic, services, utilities, or helpers
+- Create ONLY configuration files, types, and infrastructure
+` : '';
         return `⚠️ **WARNING: YOU MUST WRITE COMPLETE, PRODUCTION-READY CODE** ⚠️
 
 Many workers have failed by only creating skeleton files. YOU WILL BE EVALUATED ON:
@@ -1527,7 +1568,7 @@ Many workers have failed by only creating skeleton files. YOU WILL BE EVALUATED 
 2. Creating WORKING features with actual logic
 3. Including proper error handling, validation, and edge cases
 4. Writing PRODUCTION-QUALITY code, not placeholder stubs
-
+${setupWarning}
 **Your Task:** ${worker.task}
 
 **Files to work with:** ${worker.files?.length ? worker.files.join(', ') : 'Create whatever files are needed'}
@@ -2103,14 +2144,17 @@ Closes #${this.state.issue.number}
             console.log('Final PR merged! Marking orchestration complete.');
             await this.setPhase('complete');
             await this.github.setStatusLabel(event.prNumber, STATUS_LABELS.MERGED);
-            // Remove state file from work branch
+            // Remove state file from main branch (not work branch, which will be deleted)
             try {
+                await execa('git', ['checkout', this.state.baseBranch]);
+                await execa('git', ['pull', 'origin', this.state.baseBranch]);
                 await execa('git', ['rm', '-f', '.orchestrator/state.json']);
-                await execa('git', ['commit', '-m', 'chore: remove orchestrator state file']);
-                await GitOperations.push();
+                await execa('git', ['commit', '-m', 'chore: remove internal orchestrator state file\n\nThe .orchestrator/state.json file is internal orchestrator state\nthat should not be in the production codebase.']);
+                await execa('git', ['push', 'origin', this.state.baseBranch]);
+                console.log('Removed .orchestrator/state.json from main branch');
             }
             catch (err) {
-                console.log('State file cleanup:', err.message);
+                console.warn('State file cleanup failed:', err.message);
             }
             await this.updateProgressComment();
             return;
