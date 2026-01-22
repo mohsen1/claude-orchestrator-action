@@ -1134,15 +1134,11 @@ If needs_setup is true (project setup required):
   - Environment: .env.example
   - Container: Dockerfile, docker-compose.yml (if needed)
   - Editor: VS Code settings (optional)
-  - Type definitions: src/types/ directory with core interfaces/types ONLY
   - Documentation: README.md with setup instructions
-- CRITICAL: The setup worker MUST NOT create ANY src/ directory files except src/types/:
-  - NO files in src/db/ directory (no schema.ts, no migrations, no database code)
-  - NO files in src/lib/ directory (no utils, no helpers, no services)
-  - NO files in src/models/, src/services/, src/hooks/, src/utils/
-  - NO files in src/app/ directory except maybe a placeholder (no pages, no API routes, no components)
-  - NO files in src/components/ directory
-  - Absolutely NO implementation code of any kind in src/
+- ABSOLUTELY FORBIDDEN - DO NOT create ANY src/ directory at all:
+  - NO src/ directory whatsoever (not src/types/, not src/app/, not src/lib/, NOTHING)
+  - The first feature EM (Data Layer) will create the src/ directory structure
+  - Setup worker creates ONLY root-level configuration files
 - Leave ALL feature implementation to the subsequent EMs
 - DO NOT split setup work into multiple workers - this causes merge conflicts
 - After setup completes, then create multiple EMs for feature work with multiple workers each
@@ -1370,15 +1366,11 @@ If needs_setup is true (project setup required):
   - Environment: .env.example
   - Container: Dockerfile, docker-compose.yml (if needed)
   - Editor: VS Code settings (optional)
-  - Type definitions: src/types/ directory with core interfaces/types ONLY
   - Documentation: README.md with setup instructions
-- CRITICAL: The setup worker MUST NOT create ANY src/ directory files except src/types/:
-  - NO files in src/db/ directory (no schema.ts, no migrations, no database code)
-  - NO files in src/lib/ directory (no utils, no helpers, no services)
-  - NO files in src/models/, src/services/, src/hooks/, src/utils/
-  - NO files in src/app/ directory except maybe a placeholder (no pages, no API routes, no components)
-  - NO files in src/components/ directory
-  - Absolutely NO implementation code of any kind in src/
+- ABSOLUTELY FORBIDDEN - DO NOT create ANY src/ directory at all:
+  - NO src/ directory whatsoever (not src/types/, not src/app/, not src/lib/, NOTHING)
+  - The first feature EM (Data Layer) will create the src/ directory structure
+  - Setup worker creates ONLY root-level configuration files
 - Leave ALL feature implementation to the subsequent EMs
 - DO NOT split setup work into multiple workers - this causes merge conflicts
 - After setup completes, then create multiple EMs for feature work with multiple workers each
@@ -1855,15 +1847,12 @@ ${isSetupEM
 
     const setupWarning = isSetupWorker ? `
 
-⚠️ **YOU ARE A SETUP WORKER - CONFIG FILES ONLY** ⚠️
-Your task is PROJECT SETUP only. DO NOT create any feature implementation code:
-- NO files in src/db/ directory (no schema.ts, no database code at all)
-- NO files in src/lib/ directory (no utils, helpers, or services)
-- NO files in src/app/ directory (no pages, no API routes, no components)
-- NO files in src/components/ directory (no UI components)
-- NO files in src/models/, src/services/, src/hooks/, src/utils/
-- ABSOLUTELY NOTHING in src/ EXCEPT src/types/ for type definitions only
-Create ONLY configuration files in the root directory (.gitignore, package.json, tsconfig.json, etc.)
+⚠️ **YOU ARE A SETUP WORKER - ROOT CONFIG FILES ONLY** ⚠️
+Your task is PROJECT SETUP only. DO NOT create ANY implementation code:
+- ABSOLUTELY NO src/ directory whatsoever (not src/types/, not src/app/, not src/lib/, NOTHING)
+- Create ONLY root-level configuration files (.gitignore, package.json, tsconfig.json, etc.)
+- DO NOT create any files in subdirectories (no src/, no lib/, no components/, nothing)
+- The Data Layer EM will create the src/ directory and all implementation files
 ` : '';
 
     return `⚠️ **WARNING: YOU MUST WRITE COMPLETE, PRODUCTION-READY CODE** ⚠️
