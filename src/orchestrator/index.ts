@@ -1643,6 +1643,8 @@ If needs_setup is true (project setup required):
 
     const { maxWorkersPerEm } = this.state.config;
 
+    const isSetupEM = em.id === 0 || em.focusArea === 'Project Setup';
+
     const prompt = `You are an Engineering Manager breaking down a task into worker assignments.
 
 **Your EM Task:** ${em.task}
@@ -1652,19 +1654,29 @@ If needs_setup is true (project setup required):
 ${this.state.issue.body}
 
 **CRITICAL: FILE OWNERSHIP (Workers MUST NOT overlap):**
-- You can use up to ${maxWorkersPerEm} workers - USE MORE for complex tasks!
+${isSetupEM
+  ? `**THIS IS A PROJECT SETUP EM - YOU MUST USE EXACTLY 1 WORKER**
+- ALL setup work (gitignore, package.json, tsconfig, CI, Docker, configs) must be done by ONE worker
+- Do NOT split setup work into multiple workers - this causes merge conflicts!
+- Create a single worker that handles ALL setup tasks`
+  : `- You can use up to ${maxWorkersPerEm} workers - USE MORE for complex tasks!
 - **EACH WORKER MUST CREATE/MODIFY COMPLETELY DIFFERENT FILES** - NO overlap!
-- Overlapping files cause MERGE CONFLICTS that CRASH the entire orchestration!
+- Overlapping files cause MERGE CONFLICTS that CRASH the entire orchestration!`
+}
 - Specify EXACTLY which files each worker should create or modify
 - Tasks should be concrete (e.g., "Create Calculator class in src/calculator.ts")
 - If a task requires multiple related files, assign them ALL to the SAME worker
 - Workers can IMPORT from each other's files but NEVER MODIFY them
 
 **Worker Sizing:**
-- Simple EM task: 1-2 workers
+${isSetupEM
+  ? `- Project Setup EM: EXACTLY 1 worker (no exceptions!)
+- The single worker will create all setup files`
+  : `- Simple EM task: 1-2 workers
 - Medium EM task: 2-3 workers
 - Complex EM task: USE ALL ${maxWorkersPerEm} workers
-- More workers = parallel execution = faster delivery
+- More workers = parallel execution = faster delivery`
+}
 
 **Example of GOOD division (no file overlap):**
 - Worker-1: Creates src/types.ts (types only)
