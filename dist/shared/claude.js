@@ -314,6 +314,87 @@ export class ClaudeCodeRunner {
     getConfig() {
         return { ...this.config };
     }
+    /**
+     * Run a task with automatic retry on rate limit errors
+     * This is a wrapper around runTask that handles rate limiting with exponential backoff
+     * @param task - The task description/prompt
+     * @param sessionId - Session ID for context preservation
+     * @param options - Retry options
+     * @returns Execution result
+     */
+    async runTaskWithRetry(task, sessionId, options = {}) {
+        const { maxRetries = 5, initialDelayMs = 1000, maxDelayMs = 60000, onRetry } = options;
+        let lastError;
+        let attempt = 0;
+        for (attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                return await this.runTask(task, sessionId);
+            }
+            catch (error) {
+                lastError = error;
+                // Only retry on RateLimitError
+                if (!(error instanceof RateLimitError)) {
+                    throw error;
+                }
+                // If we've exhausted retries, throw the error
+                if (attempt >= maxRetries) {
+                    console.error(`Rate limit: Max retries (${maxRetries}) exceeded`);
+                    throw lastError;
+                }
+                // Calculate exponential backoff delay
+                const delayMs = Math.min(initialDelayMs * Math.pow(2, attempt), maxDelayMs);
+                console.log(`Rate limit detected. Retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})...`);
+                // Call onRetry callback if provided
+                if (onRetry) {
+                    onRetry(attempt + 1, lastError);
+                }
+                // Wait before retrying
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+            }
+        }
+        // Should never reach here, but TypeScript needs it
+        throw lastError;
+    }
+    /**
+     * Run a task with file changes and automatic retry on rate limit errors
+     * This is a wrapper around runTaskWithFileChanges that handles rate limiting
+     * @param task - The task description/prompt
+     * @param options - Retry options
+     * @returns Execution result
+     */
+    async runTaskWithFileChangesAndRetry(task, options = {}) {
+        const { maxRetries = 5, initialDelayMs = 1000, maxDelayMs = 60000, onRetry } = options;
+        let lastError;
+        let attempt = 0;
+        for (attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                return await this.runTaskWithFileChanges(task);
+            }
+            catch (error) {
+                lastError = error;
+                // Only retry on RateLimitError
+                if (!(error instanceof RateLimitError)) {
+                    throw error;
+                }
+                // If we've exhausted retries, throw the error
+                if (attempt >= maxRetries) {
+                    console.error(`Rate limit: Max retries (${maxRetries}) exceeded`);
+                    throw lastError;
+                }
+                // Calculate exponential backoff delay
+                const delayMs = Math.min(initialDelayMs * Math.pow(2, attempt), maxDelayMs);
+                console.log(`Rate limit detected. Retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})...`);
+                // Call onRetry callback if provided
+                if (onRetry) {
+                    onRetry(attempt + 1, lastError);
+                }
+                // Wait before retrying
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+            }
+        }
+        // Should never reach here, but TypeScript needs it
+        throw lastError;
+    }
 }
 /**
  * Generate a unique session ID

@@ -9,6 +9,15 @@ export declare class RateLimitError extends Error {
     constructor(message: string);
 }
 /**
+ * Interface for retry options
+ */
+export interface RetryOptions {
+    maxRetries?: number;
+    initialDelayMs?: number;
+    maxDelayMs?: number;
+    onRetry?: (attempt: number, error: Error) => void;
+}
+/**
  * Result of a Claude Code execution
  */
 export interface ClaudeResult {
@@ -94,6 +103,23 @@ export declare class ClaudeCodeRunner {
      * @returns Current configuration
      */
     getConfig(): ClaudeOptions;
+    /**
+     * Run a task with automatic retry on rate limit errors
+     * This is a wrapper around runTask that handles rate limiting with exponential backoff
+     * @param task - The task description/prompt
+     * @param sessionId - Session ID for context preservation
+     * @param options - Retry options
+     * @returns Execution result
+     */
+    runTaskWithRetry(task: string, sessionId: string, options?: RetryOptions): Promise<ClaudeResult>;
+    /**
+     * Run a task with file changes and automatic retry on rate limit errors
+     * This is a wrapper around runTaskWithFileChanges that handles rate limiting
+     * @param task - The task description/prompt
+     * @param options - Retry options
+     * @returns Execution result
+     */
+    runTaskWithFileChangesAndRetry(task: string, options?: RetryOptions): Promise<ClaudeResult>;
 }
 /**
  * Generate a unique session ID

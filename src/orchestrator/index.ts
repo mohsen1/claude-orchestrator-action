@@ -13,7 +13,7 @@ import { execa } from 'execa';
 import { GitHubClient } from '../shared/github.js';
 import { GitOperations } from '../shared/git.js';
 import { SDKRunner } from '../shared/sdk-runner.js';
-import { ClaudeCodeRunner, generateSessionId } from '../shared/claude.js';
+import { ClaudeCodeRunner, generateSessionId, RateLimitError } from '../shared/claude.js';
 import { ConfigManager } from '../shared/config.js';
 import { extractJson } from '../shared/json.js';
 import { slugify, getDirectorBranch } from '../shared/branches.js';
@@ -282,6 +282,58 @@ export class EventDrivenOrchestrator {
       default:
         return `Orchestrating "${issueTitle}" with ${emsCount} teams and ${totalWorkers} parallel tasks.`;
     }
+  }
+
+  /**
+   * Run a Claude task with automatic retry on rate limit errors
+   * Handles API key rotation and exponential backoff
+   */
+  private async runClaudeTaskWithRetry(
+    taskFn: () => Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number | null }>,
+    context: string
+  ): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number | null }> {
+    const maxRetries = this.configManager.getConfigCount() * 2; // Allow 2 full rotations through all configs
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await taskFn();
+      } catch (error) {
+        lastError = error as Error;
+
+        // Only retry on RateLimitError
+        if (!(error instanceof RateLimitError)) {
+          throw error;
+        }
+
+        // Rotate to next API config
+        const nextConfig = this.configManager.rotateOnRateLimit();
+        const configIndex = this.configManager.getCurrentIndex();
+
+        console.log(`\n[${context}] Rate limit detected on API key #${configIndex - 1}. Rotating to API key #${configIndex}...`);
+
+        // Update the claude runner with the new config
+        const apiKey = nextConfig.apiKey || nextConfig.env?.ANTHROPIC_API_KEY || nextConfig.env?.ANTHROPIC_AUTH_TOKEN;
+        this.claude.updateConfig({
+          apiKey,
+          baseUrl: nextConfig.env?.ANTHROPIC_BASE_URL,
+          model: nextConfig.model
+        });
+
+        // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 60s max
+        const delayMs = Math.min(1000 * Math.pow(2, attempt % 6), 60000);
+        console.log(`[${context}] Retrying in ${delayMs}ms... (attempt ${attempt + 1}/${maxRetries})`);
+
+        // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+
+    // Exhausted all retries
+    throw new Error(
+      `[${context}] Rate limit: Exhausted all ${maxRetries} retries across ${this.configManager.getConfigCount()} API configs. ` +
+      `Last error: ${lastError?.message || 'Unknown error'}`
+    );
   }
 
   /**
@@ -1160,7 +1212,10 @@ If this is a web application (Next.js, React, Vue, Angular, Svelte, etc.) with m
 }`;
 
     const sessionId = generateSessionId('director', this.state.issue.number);
-    const result = await this.claude.runTask(prompt, sessionId);
+    const result = await this.runClaudeTaskWithRetry(
+      () => this.claude.runTask(prompt, sessionId),
+      `Director Analysis (Issue #${this.state.issue.number})`
+    );
 
     if (!result.success) {
       throw new Error(`Director analysis failed: ${result.stderr}`);
@@ -1370,7 +1425,10 @@ If this is a web application (Next.js, React, Vue, Angular, Svelte, etc.) with m
 }`;
 
     const sessionId = generateSessionId('director', this.state.issue.number);
-    const result = await this.claude.runTask(prompt, sessionId);
+    const result = await this.runClaudeTaskWithRetry(
+      () => this.claude.runTask(prompt, sessionId),
+      `Director Analysis (Issue #${this.state.issue.number})`
+    );
 
     if (!result.success) {
       throw new Error(`Director analysis failed: ${result.stderr}`);

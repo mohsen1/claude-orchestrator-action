@@ -62,6 +62,11 @@ export declare class EventDrivenOrchestrator {
      */
     private generateExecutiveSummary;
     /**
+     * Run a Claude task with automatic retry on rate limit errors
+     * Handles API key rotation and exponential backoff
+     */
+    private runClaudeTaskWithRetry;
+    /**
      * Post or update progress comment on the issue
      */
     private updateProgressComment;
