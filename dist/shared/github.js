@@ -85,14 +85,18 @@ export class GitHubClient {
      */
     async dispatchRepositoryEvent(eventType, payload) {
         try {
-            await this.octokit.rest.repos.createDispatchEvent({
+            console.log(`[DEBUG] Dispatching repository event: ${eventType} to ${this.getRepo().owner}/${this.getRepo().repo}`);
+            console.log(`[DEBUG] Payload:`, JSON.stringify(payload, null, 2));
+            const result = await this.octokit.rest.repos.createDispatchEvent({
                 owner: this.getRepo().owner,
                 repo: this.getRepo().repo,
                 event_type: eventType,
                 client_payload: payload
             });
+            console.log(`[DEBUG] Repository dispatch result:`, result);
         }
         catch (error) {
+            console.error(`[ERROR] Failed to dispatch repository event ${eventType}:`, error);
             throw new Error(`Failed to dispatch repository event ${eventType}: ${error.message}`);
         }
     }
