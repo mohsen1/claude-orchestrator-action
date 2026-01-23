@@ -210,8 +210,13 @@ export class GitHubClient {
     const maxRetries = options?.maxRetries ?? 3;
     const baseDelayMs = options?.retryDelayMs ?? 1000;
 
+    // Convert all input values to strings for GitHub Actions
+    const finalInputs: Record<string, string> = {};
+    for (const [key, value] of Object.entries(inputs)) {
+      finalInputs[key] = typeof value === 'string' ? value : String(value);
+    }
+
     // Add idempotency token if provided
-    const finalInputs = { ...inputs };
     if (options?.idempotencyToken) {
       finalInputs.idempotency_token = options.idempotencyToken;
     }

@@ -64,16 +64,16 @@ export class EventDrivenOrchestrator {
         const idempotencyToken = tokenParts.join('-');
         const workflowInputs = {
             event_type: eventType,
-            issue_number: inputs.issue_number,
+            issue_number: inputs.issue_number.toString(),
         };
         if (inputs.em_id !== undefined) {
-            workflowInputs.em_id = inputs.em_id;
+            workflowInputs.em_id = inputs.em_id.toString();
         }
         if (inputs.worker_id !== undefined) {
-            workflowInputs.worker_id = inputs.worker_id;
+            workflowInputs.worker_id = inputs.worker_id.toString();
         }
         if (inputs.retry_count !== undefined) {
-            workflowInputs.retry_count = inputs.retry_count;
+            workflowInputs.retry_count = inputs.retry_count.toString();
         }
         try {
             await this.github.dispatchOrchestratorEvent(eventType, workflowInputs, {
