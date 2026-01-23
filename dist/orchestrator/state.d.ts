@@ -51,6 +51,11 @@ export interface EMState {
     workers: WorkerState[];
     reviewsAddressed: number;
     /**
+     * Files and directories that this EM owns exclusively.
+     * This prevents merge conflicts by ensuring no two EMs modify the same files.
+     */
+    files_owned?: string[];
+    /**
      * Review comment IDs (root inline comments) that have been addressed on the EM PR.
      */
     addressedReviewCommentIds?: number[];

@@ -1063,7 +1063,8 @@ If needs_setup is true (project setup required):
                     branch: `cco/issue-${this.state.issue.number}-setup`,
                     status: 'pending',
                     workers: [],
-                    reviewsAddressed: 0
+                    reviewsAddressed: 0,
+                    files_owned: setupEM.files_owned
                 }];
             // Store other EMs in state for later (after setup completes)
             this.state.pendingEMs = otherEMs.slice(0, maxEms).map((em, idx) => ({
@@ -1073,7 +1074,8 @@ If needs_setup is true (project setup required):
                 branch: `cco/issue-${this.state.issue.number}-em-${idx + 1}`,
                 status: 'pending',
                 workers: [],
-                reviewsAddressed: 0
+                reviewsAddressed: 0,
+                files_owned: em.files_owned
             }));
             console.log(`Project setup needed. ${this.state.pendingEMs.length} EMs queued after setup.`);
             await saveState(this.state, `chore: director planned project setup and ${this.state.pendingEMs.length} EMs`);
@@ -1093,7 +1095,8 @@ If needs_setup is true (project setup required):
                 branch: `cco/issue-${this.state.issue.number}-em-${idx + 1}`,
                 status: 'pending',
                 workers: [],
-                reviewsAddressed: 0
+                reviewsAddressed: 0,
+                files_owned: em.files_owned
             }));
             await this.setPhase('em_assignment');
             await saveState(this.state, `chore: director assigned ${this.state.ems.length} EMs`);
@@ -1268,6 +1271,7 @@ If needs_setup is true (project setup required):
                     status: 'pending',
                     workers: [],
                     reviewsAddressed: 0,
+                    files_owned: setupEM.files_owned,
                     startedAt: new Date().toISOString()
                 }];
             // Store other EMs in state for later (after setup completes)
@@ -1278,7 +1282,8 @@ If needs_setup is true (project setup required):
                 branch: `cco/issue-${this.state.issue.number}-em-${idx + 1}`,
                 status: 'pending',
                 workers: [],
-                reviewsAddressed: 0
+                reviewsAddressed: 0,
+                files_owned: em.files_owned
             }));
             console.log(`Project setup needed. ${this.state.pendingEMs.length} EMs queued after setup.`);
             await saveState(this.state, `chore: director starting project setup first (${this.state.pendingEMs.length} EMs pending)`);
@@ -1295,6 +1300,7 @@ If needs_setup is true (project setup required):
                 status: 'pending',
                 workers: [],
                 reviewsAddressed: 0,
+                files_owned: em.files_owned,
                 startedAt: new Date().toISOString()
             }));
             await this.setPhase('em_assignment');
@@ -1413,8 +1419,9 @@ If needs_setup is true (project setup required):
 
 **Your EM Task:** ${em.task}
 **Focus Area:** ${em.focusArea}
+${em.files_owned ? `**Files Owned by this EM:** ${em.files_owned.join(', ')}
 
-**Context - Original Issue:**
+` : ''}**Context - Original Issue:**
 ${this.state.issue.body}
 
 ${isSetupEM
@@ -1458,19 +1465,30 @@ ${isSetupEM
 - Use up to ${maxWorkersPerEm} workers for complex areas
 - More atomic workers = more parallelization = faster delivery`}
 
-**File Assignment Rules:**
+**CRITICAL: FILE ASSIGNMENT (You MUST populate the files array)**
+- EVERY worker MUST have a non-empty "files" array listing the specific file(s) they create/modify
+- This is MANDATORY - empty files arrays are NOT allowed
 - Each file appears in EXACTLY ONE worker's files array (initially)
-- Dependent workers may ADD to existing files - state this clearly in the task
-- Format: "Create X in path/to/file.ts" or "Add Y to path/to/file.ts after Z is created"
+- Dependent workers may ADD to existing files - state this clearly in the task with "Add X to existing file Y"
+- Format: "Create X in path/to/file.ts" or "Add Z to path/to/file.ts after Y is created"
+
+${em.files_owned ? `**IMPORTANT: This EM owns these files/directories:** ${em.files_owned.join(', ')}
+- ALL workers you create should ONLY work within these files/directories
+- Do NOT assign files outside this EM's ownership
+- Break down the EM's owned files across workers appropriately
+
+` : ''}**File Assignment Rules:**
 
 **Output ONLY a JSON array (no other text):**
 [
   {
     "worker_id": 1,
-    "task": "ATOMIC task with SINGLE verifiable output. Be specific: 'Create X in Y' or 'Add Z to existing file Y'",
+    "task": "ATOMIC task with SINGLE verifiable output. Be specific: 'Create X in Y' or 'Add Z to existing file Y'. MUST include 'Output: path/to/file.ts' for easy parsing",
     "files": ["path/to/file1.ts"]
   }
-]`;
+]
+
+**REMEMBER: The "files" array is REQUIRED for every worker - do not leave it empty!**`;
         const sessionId = generateSessionId('em', this.state.issue.number, em.id);
         const result = await this.claude.runTask(prompt, sessionId);
         if (!result.success) {
