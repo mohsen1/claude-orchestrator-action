@@ -88,24 +88,29 @@ export class GitHubClient {
                 owner: this.getRepo().owner,
                 repo: this.getRepo().repo
             });
-            // Prioritize workflows by name:
+            // Extract just the filename from the path
+            const workflowFiles = workflows.workflows.map(w => w.path.replace(/^\.github\/workflows\//, ''));
+            // Prioritize workflows by filename:
             // 1. cco.yml (most common name for user workflows)
             // 2. orchestrator.yml (original name)
-            // 3. Any workflow with 'cco' or 'orchestrator' in the name
-            const workflowNames = workflows.workflows.map(w => w.name);
+            // 3. Any workflow with 'cco' or 'orchestrator' in the filename
+            console.log(`[DEBUG] Available workflows: ${workflowFiles.join(', ')}`);
             // Check for exact matches first
-            if (workflowNames.includes('cco.yml'))
+            if (workflowFiles.includes('cco.yml'))
                 return 'cco.yml';
-            if (workflowNames.includes('orchestrator.yml'))
+            if (workflowFiles.includes('orchestrator.yml'))
                 return 'orchestrator.yml';
             // Check for partial matches
-            for (const name of workflowNames) {
-                if (name.toLowerCase().includes('cco') || name.toLowerCase().includes('orchestrator')) {
-                    return name;
+            for (const file of workflowFiles) {
+                if (file.toLowerCase().includes('cco') || file.toLowerCase().includes('orchestrator')) {
+                    console.log(`[DEBUG] Found matching workflow: ${file}`);
+                    return file;
                 }
             }
             // Fallback to first workflow
-            return workflows.workflows[0]?.name || 'cco.yml';
+            const firstWorkflow = workflowFiles[0] || 'cco.yml';
+            console.log(`[DEBUG] Using first workflow: ${firstWorkflow}`);
+            return firstWorkflow;
         }
         catch (error) {
             console.warn(`Failed to detect workflow, using default: ${error.message}`);
