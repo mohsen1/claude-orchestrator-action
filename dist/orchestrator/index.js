@@ -1392,14 +1392,17 @@ If needs_setup is true (project setup required):
         await this.startNextWorker(pendingEM);
     }
     /**
-     * Break down an EM task into worker tasks
+     * Break down an EM task into ATOMIC, VERIFIABLE worker tasks
+     *
+     * CRITICAL: Each worker must create ONE specific, verifiable change.
+     * This prevents merge conflicts and enables true parallelization.
      */
     async breakdownEMTask(em) {
         if (!this.state)
             throw new Error('No state');
         const { maxWorkersPerEm } = this.state.config;
         const isSetupEM = em.id === 0 || em.focusArea === 'Project Setup';
-        const prompt = `You are an Engineering Manager breaking down a task into worker assignments.
+        const prompt = `You are an Engineering Manager breaking down a task into ATOMIC, VERIFIABLE worker assignments.
 
 **Your EM Task:** ${em.task}
 **Focus Area:** ${em.focusArea}
@@ -1407,48 +1410,57 @@ If needs_setup is true (project setup required):
 **Context - Original Issue:**
 ${this.state.issue.body}
 
-**CRITICAL: FILE OWNERSHIP (Workers MUST NOT overlap):**
 ${isSetupEM
-            ? `**THIS IS A PROJECT SETUP EM - YOU MUST USE EXACTLY 1 WORKER**
-- ALL setup work (gitignore, package.json, tsconfig, CI, Docker, configs) must be done by ONE worker
-- Do NOT split setup work into multiple workers - this causes merge conflicts!
-- Create a single worker that handles ALL setup tasks`
-            : `- You can use up to ${maxWorkersPerEm} workers - USE MORE for complex tasks!
-- **EACH WORKER MUST CREATE/MODIFY COMPLETELY DIFFERENT FILES** - NO overlap!
-- Overlapping files cause MERGE CONFLICTS that CRASH the entire orchestration!`}
-- Specify EXACTLY which files each worker should create or modify
-- Tasks should be concrete (e.g., "Create Calculator class in src/calculator.ts")
-- If a task requires multiple related files, assign them ALL to the SAME worker
-- Workers can IMPORT from each other's files but NEVER MODIFY them
+            ? `**THIS IS A PROJECT SETUP EM - CREATE EXACTLY 1 WORKER**
+- The single worker will create ALL root-level configuration files
+- DO NOT create any src/ directory or implementation code
+- Files: .gitignore, package.json, tsconfig.json, .github/workflows/ci.yml, Dockerfile, .env.example, README.md`
+            : `**CRITICAL: ATOMIC TASKS (Single Verifiable Output Per Worker)**
+- Each worker creates ONE specific thing that can be easily verified
+- Break down coarse tasks into FINE-GRAINED, ATOMIC units
+- Each task should have a SINGLE, CLEAR output that's easy to review
+
+**Examples of ATOMIC vs COARSE Tasks:**
+
+❌ BAD (Coarse - causes conflicts):
+- "Create database schema with Drizzle ORM including users, groups, expenses, settlements tables"
+- "Build authentication system with login, signup, and session management"
+- "Create all UI components for the expense tracking feature"
+
+✅ GOOD (Atomic - one clear output):
+- "Create Drizzle schema for ONE table: users (id, email, passwordHash, createdAt). Output: src/db/schema.ts with users table"
+- "Create Drizzle schema for ONE table: groups (id, name, ownerId). Output: src/db/schema.ts with groups table ADDED"
+- "Create login API route at app/api/auth/login/route.ts with validation and JWT token generation"
+- "Create signup API route at app/api/auth/signup/route.ts with email validation and password hashing"
+- "Create ExpenseForm component in src/components/expenses/ExpenseForm.tsx with form validation"
+
+**ATOMIC TASK RULES:**
+1. ONE file or ONE entity per worker (not multiple files/entities)
+2. Output must be easily verifiable (check that X exists)
+3. Tasks should be serializable when dependent (Worker-2 adds to Worker-1's file)
+4. File ownership is EXCLUSIVE (no overlap between workers)
+5. If a worker modifies an existing file, state EXACTLY what they add/change
+
+**DEPENDENT TASKS (Sequential Execution):**
+- If Worker-2 depends on Worker-1's output, clearly state: "Depends on Worker-1 creating src/db/schema.ts"
+- Dependent workers will run AFTER their dependencies complete
+- Example: Worker-1 creates users table, Worker-2 adds groups table to SAME file
 
 **Worker Sizing:**
-${isSetupEM
-            ? `- Project Setup EM: EXACTLY 1 worker (no exceptions!)
-- The single worker will create all setup files`
-            : `- Simple EM task: 1-2 workers
-- Medium EM task: 2-3 workers
-- Complex EM task: USE ALL ${maxWorkersPerEm} workers
-- More workers = parallel execution = faster delivery`}
-
-**Example of GOOD division (no file overlap):**
-- Worker-1: Creates src/types.ts (types only)
-- Worker-2: Creates src/storage.ts (imports from types.ts but doesn't modify it)  
-- Worker-3: Creates src/notes.ts (imports from types.ts and storage.ts)
-
-**Example of BAD division (will cause conflicts):**
-- Worker-1: src/types.ts
-- Worker-2: src/types.ts, src/storage.ts  <- FATAL! Overlaps with Worker-1
+- Break down the EM task into as many ATOMIC workers as needed
+- Use up to ${maxWorkersPerEm} workers for complex areas
+- More atomic workers = more parallelization = faster delivery`}
 
 **File Assignment Rules:**
-- Each file appears in EXACTLY ONE worker's files array
-- Shared utilities/types should be in one worker, imported by others
-- Test files belong to the worker who creates the source file
+- Each file appears in EXACTLY ONE worker's files array (initially)
+- Dependent workers may ADD to existing files - state this clearly in the task
+- Format: "Create X in path/to/file.ts" or "Add Y to path/to/file.ts after Z is created"
 
 **Output ONLY a JSON array (no other text):**
 [
   {
     "worker_id": 1,
-    "task": "Specific task with EXACT files this worker will create/modify",
+    "task": "ATOMIC task with SINGLE verifiable output. Be specific: 'Create X in Y' or 'Add Z to existing file Y'",
     "files": ["path/to/file1.ts"]
   }
 ]`;
@@ -1554,6 +1566,16 @@ Your task is PROJECT SETUP only. DO NOT create ANY implementation code:
 - DO NOT create any files in subdirectories (no src/, no lib/, no components/, nothing)
 - The Data Layer EM will create the src/ directory and all implementation files
 ` : '';
+        const atomicWarning = !isSetupWorker ? `
+
+🎯 **ATOMIC TASK - SINGLE OUTPUT FOCUS** 🎯
+Your task is ATOMIC - create ONE specific thing:
+- Focus on the SINGLE output described in your task
+- Do NOT expand scope to create related files
+- Do NOT create additional files beyond what's specified
+- Your change should be easily verifiable: "I created X in Y"
+- Other workers will handle related functionality in parallel
+` : '';
         return `⚠️ **WARNING: YOU MUST WRITE COMPLETE, PRODUCTION-READY CODE** ⚠️
 
 Many workers have failed by only creating skeleton files. YOU WILL BE EVALUATED ON:
@@ -1561,7 +1583,7 @@ Many workers have failed by only creating skeleton files. YOU WILL BE EVALUATED 
 2. Creating WORKING features with actual logic
 3. Including proper error handling, validation, and edge cases
 4. Writing PRODUCTION-QUALITY code, not placeholder stubs
-${setupWarning}
+${setupWarning}${atomicWarning}
 **Your Task:** ${worker.task}
 
 **Files to work with:** ${worker.files?.length ? worker.files.join(', ') : 'Create whatever files are needed'}
@@ -1588,17 +1610,20 @@ ${this.state?.issue.body || ''}
 - Empty skeleton files with no actual implementation
 - Files with just "export const xyz = () => TODO" or similar placeholders
 - Type-only files with no actual logic implementation
+- Additional files beyond what your task specifies (let other workers handle those)
 
 **Example of GOOD implementation:**
 - A React component with full JSX, props, hooks, event handlers, and styling
 - An API route with validation, error handling, database queries, and responses
 - A utility function with full logic, edge case handling, and proper types
+- ONE specific table added to a schema file (not the entire schema)
 
 **Example of BAD implementation (DO NOT DO THIS):**
 - A component with just "export const Component = () => <div>TODO</div>;"
 - An API route with just "export async function GET() { return Response.json({}); }"
 - Type-only files with no actual logic
 - Files with placeholder comments like "// TODO: implement this"
+- Creating 10 related files when your task only asks for ONE (scope creep)
 
 Implement this task now with COMPLETE, PRODUCTION-READY code. Every file must have actual working code.`;
     }

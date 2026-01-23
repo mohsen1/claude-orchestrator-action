@@ -137,7 +137,10 @@ export declare class EventDrivenOrchestrator {
      */
     private startNextEM;
     /**
-     * Break down an EM task into worker tasks
+     * Break down an EM task into ATOMIC, VERIFIABLE worker tasks
+     *
+     * CRITICAL: Each worker must create ONE specific, verifiable change.
+     * This prevents merge conflicts and enables true parallelization.
      */
     private breakdownEMTask;
     /**
