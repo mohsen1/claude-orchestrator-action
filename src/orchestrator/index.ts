@@ -2846,6 +2846,11 @@ Closes #${this.state.issue.number}
   private async checkAndAddressReviews(): Promise<void> {
     if (!this.state) return;
 
+    const skipReviewHandling = this.state.config.reviewWaitMinutes === 0;
+    if (skipReviewHandling) {
+      console.log('review_wait_minutes=0, skipping review addressing for all PRs');
+    }
+
     for (const em of this.state.ems) {
       // Check worker PRs
       for (const worker of em.workers) {
@@ -2855,7 +2860,8 @@ Closes #${this.state.issue.number}
             const hasChangesRequested = reviews.some(r => r.state === 'CHANGES_REQUESTED');
             const unaddressed = await this.getUnaddressedRootReviewCommentIds(worker.prNumber);
 
-            if (hasChangesRequested || unaddressed.length > 0) {
+            // CRITICAL: When review_wait_minutes=0, skip review addressing and proceed to auto-merge
+            if (!skipReviewHandling && (hasChangesRequested || unaddressed.length > 0)) {
               console.log(`Worker-${worker.id} PR #${worker.prNumber} has reviews - addressing`);
               await this.github.setStatusLabel(worker.prNumber, STATUS_LABELS.ADDRESSING_FEEDBACK);
               try {
@@ -2869,7 +2875,7 @@ Closes #${this.state.issue.number}
               await this.updateProgressComment();
             }
 
-            // If review is clean, try merging
+            // Try merging (handles Copilot COMMENTED reviews correctly)
             await this.maybeAutoMergePR(worker.prNumber);
           } catch (err) {
             console.log(`Could not check reviews for Worker-${worker.id} PR: ${(err as Error).message}`);
@@ -3600,13 +3606,19 @@ ${reviewBody}
         // Handle unaddressed reviews
         const reviews = await this.github.getPullRequestReviews(worker.prNumber);
         const reviewComments = await this.github.getPullRequestComments(worker.prNumber);
-        
+
         // Check if there are comments that haven't been addressed
         const hasUnaddressedComments = reviewComments.length > 0 && worker.reviewsAddressed === 0;
         const hasChangesRequested = reviews.some(r => r.state === 'CHANGES_REQUESTED');
         const hasReviewWithComments = reviews.some(r => r.state === 'COMMENTED' && reviewComments.length > 0);
 
-        if (hasUnaddressedComments || hasChangesRequested || hasReviewWithComments) {
+        // CRITICAL: When review_wait_minutes=0, skip review addressing and proceed to auto-merge
+        // This allows for fully automated orchestration without manual review
+        if (this.state.config.reviewWaitMinutes === 0) {
+          // Skip all review handling - proceed directly to merge attempt
+          // The maybeAutoMergePR function will handle Copilot COMMENTED reviews correctly
+          console.log(`review_wait_minutes=0, skipping review addressing for PR #${worker.prNumber}`);
+        } else if (hasUnaddressedComments || hasChangesRequested || hasReviewWithComments) {
           console.log(`\n=== Worker-${worker.id} PR #${worker.prNumber} has unaddressed reviews - handling ===`);
           await this.github.setStatusLabel(worker.prNumber, STATUS_LABELS.ADDRESSING_FEEDBACK);
           await this.addressReview(worker.branch, worker.prNumber, '');
