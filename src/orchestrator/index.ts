@@ -137,43 +137,30 @@ export class EventDrivenOrchestrator {
     ];
     const idempotencyToken = tokenParts.join('-');
 
-    const workflowInputs: Record<string, string> = {
+    const workflowInputs: Record<string, string | number> = {
       event_type: eventType,
-      issue_number: inputs.issue_number.toString(),
+      issue_number: inputs.issue_number,
     };
 
     if (inputs.em_id !== undefined) {
-      workflowInputs.em_id = inputs.em_id.toString();
+      workflowInputs.em_id = inputs.em_id;
     }
     if (inputs.worker_id !== undefined) {
-      workflowInputs.worker_id = inputs.worker_id.toString();
+      workflowInputs.worker_id = inputs.worker_id;
     }
     if (inputs.retry_count !== undefined) {
-      workflowInputs.retry_count = inputs.retry_count.toString();
+      workflowInputs.retry_count = inputs.retry_count;
     }
 
     try {
-      // Use repository_dispatch instead of workflow_dispatch
-      // This doesn't require knowing the workflow filename
-      const clientPayload: Record<string, unknown> = {
-        event_type: eventType,
-        issue_number: inputs.issue_number,
-        idempotency_token: idempotencyToken
-      };
-
-      if (inputs.em_id !== undefined) {
-        clientPayload.em_id = inputs.em_id;
-      }
-      if (inputs.worker_id !== undefined) {
-        clientPayload.worker_id = inputs.worker_id;
-      }
-      if (inputs.retry_count !== undefined) {
-        clientPayload.retry_count = inputs.retry_count;
-      }
-
-      await this.github.dispatchRepositoryEvent(
-        'cco-continue',
-        clientPayload
+      await this.github.dispatchOrchestratorEvent(
+        eventType,
+        workflowInputs,
+        {
+          maxRetries: 3,
+          retryDelayMs: 1000,
+          idempotencyToken
+        }
       );
 
       await debugLog('event_dispatched', {

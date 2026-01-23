@@ -53,6 +53,7 @@ export class GitHubClient {
   private octokit: ReturnType<typeof getOctokit>;
   private owner: string;
   private repo: string;
+  private cachedWorkflowFilename?: string;  // Cache for auto-detected workflow name
 
   /**
    * Initialize GitHub client
@@ -143,34 +144,116 @@ export class GitHubClient {
   }
 
   /**
-   * Dispatch a repository event to trigger workflows
-   * This is preferable to workflow_dispatch as it doesn't require knowing the workflow filename
-   * @param eventType - The event type to dispatch
-   * @param payload - The event payload
-   * @returns void
+   * Auto-detect the orchestrator workflow filename
+   * Searches for workflows that handle 'cco' events or have orchestrator-related names
+   * @returns The workflow filename (e.g., 'cco.yml')
    */
-  async dispatchRepositoryEvent(
-    eventType: string,
-    payload: Record<string, unknown>
-  ): Promise<void> {
+  async detectOrchestratorWorkflow(): Promise<string> {
     try {
-      console.log(`[DEBUG] Dispatching repository event: ${eventType} to ${this.getRepo().owner}/${this.getRepo().repo}`);
-      console.log(`[DEBUG] Payload:`, JSON.stringify(payload, null, 2));
-
-      const result = await this.octokit.rest.repos.createDispatchEvent({
+      const { data: workflows } = await this.octokit.rest.actions.listRepoWorkflows({
         owner: this.getRepo().owner,
-        repo: this.getRepo().repo,
-        event_type: eventType,
-        client_payload: payload
+        repo: this.getRepo().repo
       });
 
-      console.log(`[DEBUG] Repository dispatch result:`, result);
+      // Prioritize workflows by name:
+      // 1. cco.yml (most common name for user workflows)
+      // 2. orchestrator.yml (original name)
+      // 3. Any workflow with 'cco' or 'orchestrator' in the name
+      const workflowNames = workflows.workflows.map(w => w.name);
+
+      // Check for exact matches first
+      if (workflowNames.includes('cco.yml')) return 'cco.yml';
+      if (workflowNames.includes('orchestrator.yml')) return 'orchestrator.yml';
+
+      // Check for partial matches
+      for (const name of workflowNames) {
+        if (name.toLowerCase().includes('cco') || name.toLowerCase().includes('orchestrator')) {
+          return name;
+        }
+      }
+
+      // Fallback to first workflow
+      return workflows.workflows[0]?.name || 'cco.yml';
     } catch (error) {
-      console.error(`[ERROR] Failed to dispatch repository event ${eventType}:`, error);
-      throw new Error(
-        `Failed to dispatch repository event ${eventType}: ${(error as Error).message}`
-      );
+      console.warn(`Failed to detect workflow, using default: ${(error as Error).message}`);
+      return 'cco.yml'; // Default fallback
     }
+  }
+
+  /**
+   * Dispatch a workflow with auto-detected workflow filename
+   * @param eventType - Event type (start_em, execute_worker, etc.)
+   * @param inputs - Workflow inputs
+   * @param options - Optional retry and idempotency options
+   * @returns void
+   */
+  async dispatchOrchestratorEvent(
+    eventType: string,
+    inputs: Record<string, string | number>,
+    options?: {
+      maxRetries?: number;
+      retryDelayMs?: number;
+      idempotencyToken?: string;
+    }
+  ): Promise<void> {
+    // Auto-detect workflow filename (cache for performance)
+    if (!this.cachedWorkflowFilename) {
+      this.cachedWorkflowFilename = await this.detectOrchestratorWorkflow();
+    }
+
+    const maxRetries = options?.maxRetries ?? 3;
+    const baseDelayMs = options?.retryDelayMs ?? 1000;
+
+    // Add idempotency token if provided
+    const finalInputs = { ...inputs };
+    if (options?.idempotencyToken) {
+      finalInputs.idempotency_token = options.idempotencyToken;
+    }
+
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        console.log(`[DEBUG] Dispatching ${eventType} to workflow: ${this.cachedWorkflowFilename}`);
+
+        await this.octokit.rest.actions.createWorkflowDispatch({
+          owner: this.getRepo().owner,
+          repo: this.getRepo().repo,
+          workflow_id: this.cachedWorkflowFilename,
+          ref: 'main',
+          inputs: finalInputs as Record<string, string>
+        });
+
+        console.log(`[DEBUG] Successfully dispatched ${eventType}`);
+        return; // Success
+      } catch (error) {
+        lastError = error as Error;
+        const errorMessage = lastError.message.toLowerCase();
+
+        // Don't retry on 4xx errors
+        if (errorMessage.includes('400') ||
+            errorMessage.includes('404') ||
+            errorMessage.includes('422')) {
+          throw new Error(
+            `Failed to dispatch ${eventType} to workflow ${this.cachedWorkflowFilename}: ${lastError.message}`
+          );
+        }
+
+        // Retry on rate limits or transient errors
+        if (attempt < maxRetries - 1) {
+          const jitter = Math.random() * 0.3;
+          const delay = baseDelayMs * Math.pow(2, attempt) * (1 + jitter);
+          console.log(
+            `[DEBUG] Dispatch attempt ${attempt + 1} failed, retrying in ${Math.round(delay)}ms: ${lastError.message}`
+          );
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    throw new Error(
+      `Failed to dispatch ${eventType} to workflow ${this.cachedWorkflowFilename} after ${maxRetries} attempts: ${lastError?.message}`
+    );
   }
 
   /**

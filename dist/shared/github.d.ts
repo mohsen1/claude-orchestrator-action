@@ -39,6 +39,7 @@ export declare class GitHubClient {
     private octokit;
     private owner;
     private repo;
+    private cachedWorkflowFilename?;
     /**
      * Initialize GitHub client
      * @param token - GitHub token (PAT or GitHub token)
@@ -63,13 +64,23 @@ export declare class GitHubClient {
         idempotencyToken?: string;
     }): Promise<void>;
     /**
-     * Dispatch a repository event to trigger workflows
-     * This is preferable to workflow_dispatch as it doesn't require knowing the workflow filename
-     * @param eventType - The event type to dispatch
-     * @param payload - The event payload
+     * Auto-detect the orchestrator workflow filename
+     * Searches for workflows that handle 'cco' events or have orchestrator-related names
+     * @returns The workflow filename (e.g., 'cco.yml')
+     */
+    detectOrchestratorWorkflow(): Promise<string>;
+    /**
+     * Dispatch a workflow with auto-detected workflow filename
+     * @param eventType - Event type (start_em, execute_worker, etc.)
+     * @param inputs - Workflow inputs
+     * @param options - Optional retry and idempotency options
      * @returns void
      */
-    dispatchRepositoryEvent(eventType: string, payload: Record<string, unknown>): Promise<void>;
+    dispatchOrchestratorEvent(eventType: string, inputs: Record<string, string | number>, options?: {
+        maxRetries?: number;
+        retryDelayMs?: number;
+        idempotencyToken?: string;
+    }): Promise<void>;
     /**
      * Create a Git branch
      * @param branchName - Name of the branch to create
