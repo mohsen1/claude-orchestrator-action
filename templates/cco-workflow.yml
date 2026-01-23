@@ -79,7 +79,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: target
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || 'main' }}
+          ref: >-
+            ${{
+              github.event_name == 'pull_request' && github.event.pull_request.merged && github.event.pull_request.base.ref ||
+              github.event_name == 'pull_request' && github.event.pull_request.head.ref ||
+              'main'
+            }}
           token: ${{ secrets.CCO_PAT }}
           fetch-depth: 0
 
