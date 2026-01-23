@@ -77,6 +77,26 @@ export class GitHubClient {
         throw new Error(`Failed to dispatch workflow ${workflowId} after ${maxRetries} attempts: ${lastError?.message}`);
     }
     /**
+     * Dispatch a repository event to trigger workflows
+     * This is preferable to workflow_dispatch as it doesn't require knowing the workflow filename
+     * @param eventType - The event type to dispatch
+     * @param payload - The event payload
+     * @returns void
+     */
+    async dispatchRepositoryEvent(eventType, payload) {
+        try {
+            await this.octokit.rest.repos.createDispatchEvent({
+                owner: this.getRepo().owner,
+                repo: this.getRepo().repo,
+                event_type: eventType,
+                client_payload: payload
+            });
+        }
+        catch (error) {
+            throw new Error(`Failed to dispatch repository event ${eventType}: ${error.message}`);
+        }
+    }
+    /**
      * Create a Git branch
      * @param branchName - Name of the branch to create
      * @param fromBranch - Name of the branch to create from (or SHA)

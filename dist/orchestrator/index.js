@@ -76,12 +76,23 @@ export class EventDrivenOrchestrator {
             workflowInputs.retry_count = inputs.retry_count.toString();
         }
         try {
-            await this.github.dispatchWorkflow('orchestrator.yml', 'main', // Always dispatch from main branch
-            workflowInputs, {
-                maxRetries: 3,
-                retryDelayMs: 1000,
-                idempotencyToken
-            });
+            // Use repository_dispatch instead of workflow_dispatch
+            // This doesn't require knowing the workflow filename
+            const clientPayload = {
+                event_type: eventType,
+                issue_number: inputs.issue_number,
+                idempotency_token: idempotencyToken
+            };
+            if (inputs.em_id !== undefined) {
+                clientPayload.em_id = inputs.em_id;
+            }
+            if (inputs.worker_id !== undefined) {
+                clientPayload.worker_id = inputs.worker_id;
+            }
+            if (inputs.retry_count !== undefined) {
+                clientPayload.retry_count = inputs.retry_count;
+            }
+            await this.github.dispatchRepositoryEvent('cco-continue', clientPayload);
             await debugLog('event_dispatched', {
                 eventType,
                 issueNumber: inputs.issue_number,

@@ -1,0 +1,177 @@
+# Claude Code Orchestrator - Complete Workflow
+#
+# This workflow handles ALL orchestrator events using event routing
+# It routes different event types to the orchestrator action
+
+name: Claude Orchestrator
+
+on:
+  # Start orchestration when issue is labeled with 'cco'
+  issues:
+    types: [labeled]
+
+  # Continue when PR is merged
+  pull_request:
+    types: [closed]
+
+  # Handle code review feedback
+  pull_request_review:
+    types: [submitted]
+
+  # Handle workflow_dispatch events from orchestrator
+  workflow_dispatch:
+    inputs:
+      event_type:
+        description: 'Event type from orchestrator'
+        required: true
+        type: string
+      issue_number:
+        description: 'Issue number'
+        required: false
+        type: string
+      em_id:
+        description: 'EM ID'
+        required: false
+        type: string
+      worker_id:
+        description: 'Worker ID'
+        required: false
+        type: string
+      retry_count:
+        description: 'Retry count'
+        required: false
+        type: string
+      idempotency_token:
+        description: 'Idempotency token'
+        required: false
+        type: string
+
+  # Manual trigger for recovery/debugging
+  repository_dispatch:
+    types: [cco-continue]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  # Route events to the orchestrator
+  # This job handles ALL orchestrator events by routing them
+  orchestrate:
+    name: Handle Event
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'issues' && github.event.label.name == 'cco') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'cco/')) ||
+      (github.event_name == 'pull_request_review' && startsWith(github.event.pull_request.head.ref, 'cco/')) ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'repository_dispatch'
+
+    steps:
+      - name: Checkout orchestrator
+        uses: actions/checkout@v4
+        with:
+          repository: mohsen1/claude-orchestrator-action
+          path: orchestrator
+
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          path: target
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || 'main' }}
+          token: ${{ secrets.CCO_PAT }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies and build
+        run: cd orchestrator && npm ci && npm run build
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure Git
+        working-directory: target
+        run: |
+          git config user.name "Claude Orchestrator"
+          git config user.email "orchestrator@claude.ai"
+
+      - name: Run Event Handler
+        working-directory: target
+        env:
+          GITHUB_TOKEN: ${{ secrets.CCO_PAT }}
+          # Determine event type based on trigger
+          EVENT_TYPE: >-
+            ${{
+              github.event_name == 'issues' && 'issue_labeled' ||
+              github.event_name == 'pull_request' && github.event.pull_request.merged && 'pull_request_merged' ||
+              github.event_name == 'pull_request_review' && 'pull_request_review' ||
+              github.event_name == 'workflow_dispatch' && inputs.event_type ||
+              github.event_name == 'repository_dispatch' && github.event.client_payload.event_type ||
+              'unknown'
+            }}
+          ISSUE_NUMBER: >-
+            ${{
+              github.event_name == 'issues' && github.event.issue.number ||
+              github.event_name == 'workflow_dispatch' && inputs.issue_number ||
+              github.event_name == 'repository_dispatch' && github.event.client_payload.issue_number ||
+              ''
+            }}
+          PR_NUMBER: >-
+            ${{
+              (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.number ||
+              ''
+            }}
+          BRANCH: >-
+            ${{
+              (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.head.ref ||
+              ''
+            }}
+          REVIEW_STATE: >-
+            ${{
+              github.event_name == 'pull_request_review' && github.event.review.state ||
+              ''
+            }}
+          REVIEW_BODY: >-
+            ${{
+              github.event_name == 'pull_request_review' && github.event.review.body ||
+              ''
+            }}
+          CLAUDE_CONFIGS: ${{ secrets.CLAUDE_CONFIGS }}
+          MAX_EMS: '10'
+          MAX_WORKERS_PER_EM: '3'
+          REVIEW_WAIT_MINUTES: '0'
+          PR_LABEL: 'cco'
+          CCO_DEBUG: 'true'
+          EM_ID: >-
+            ${{
+              github.event_name == 'workflow_dispatch' && inputs.em_id ||
+              github.event_name == 'repository_dispatch' && github.event.client_payload.em_id ||
+              ''
+            }}
+          WORKER_ID: >-
+            ${{
+              github.event_name == 'workflow_dispatch' && inputs.worker_id ||
+              github.event_name == 'repository_dispatch' && github.event.client_payload.worker_id ||
+              ''
+            }}
+          RETRY_COUNT: >-
+            ${{
+              github.event_name == 'workflow_dispatch' && inputs.retry_count ||
+              github.event_name == 'repository_dispatch' && github.event.client_payload.retry_count ||
+              ''
+            }}
+          IDEMPOTENCY_TOKEN: >-
+            ${{
+              github.event_name == 'workflow_dispatch' && inputs.idempotency_token ||
+              github.event_name == 'repository_dispatch' && github.event.client_payload.idempotency_token ||
+              ''
+            }}
+        run: |
+          export REPO_OWNER="${GITHUB_REPOSITORY%/*}"
+          export REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          node ../orchestrator/dist/orchestrator/run.js
