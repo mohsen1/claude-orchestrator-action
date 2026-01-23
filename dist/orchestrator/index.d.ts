@@ -141,10 +141,23 @@ export declare class EventDrivenOrchestrator {
      *
      * CRITICAL: Each worker must create ONE specific, verifiable change.
      * This prevents merge conflicts and enables true parallelization.
+     *
+     * Returns tasks with dependency information extracted from task descriptions.
      */
     private breakdownEMTask;
     /**
-     * Start ALL workers for an EM in parallel
+     * Process worker tasks to extract dependencies and detect file-based conflicts
+     *
+     * 1. Parse explicit "Depends on Worker-X" patterns from task descriptions
+     * 2. Detect implicit dependencies when multiple workers modify the same file
+     * 3. Build a dependency graph for topological execution
+     */
+    private processWorkerDependencies;
+    /**
+     * Start ALL workers for an EM, respecting dependency order
+     *
+     * Workers with unmet dependencies wait until their dependencies complete.
+     * Workers whose dependencies are met execute in parallel.
      */
     private startAllWorkersForEM;
     /**

@@ -774,11 +774,13 @@ ${emTable}${finalPRSection}${errorSection}
       // Break down into worker tasks using Claude
       const workerTasks = await this.breakdownEMTask(em);
 
-      // Create worker states
+      // Create worker states (with dependencies)
       em.workers = workerTasks.map(wt => ({
         id: wt.worker_id,
         task: wt.task,
         files: wt.files,
+        dependencies: wt.dependencies,
+        outputFiles: wt.outputFiles,
         branch: `${em.branch}-w-${wt.worker_id}`,
         status: 'pending' as const,
         reviewsAddressed: 0
@@ -1587,11 +1589,13 @@ If needs_setup is true (project setup required):
       // Break down into worker tasks
       const workerTasks = await this.breakdownEMTask(em);
 
-      // Create worker states
+      // Create worker states (with dependencies)
       em.workers = workerTasks.map(wt => ({
         id: wt.worker_id,
         task: wt.task,
         files: wt.files,
+        dependencies: wt.dependencies,
+        outputFiles: wt.outputFiles,
         branch: `${em.branch}-w-${wt.worker_id}`,
         status: 'pending' as const,
         reviewsAddressed: 0
@@ -1636,11 +1640,13 @@ If needs_setup is true (project setup required):
     // Break down into worker tasks
     const workerTasks = await this.breakdownEMTask(pendingEM);
 
-    // Create worker states
+    // Create worker states (with dependencies)
     pendingEM.workers = workerTasks.map(wt => ({
       id: wt.worker_id,
       task: wt.task,
       files: wt.files,
+      dependencies: wt.dependencies,
+      outputFiles: wt.outputFiles,
       branch: `${pendingEM.branch}-w-${wt.worker_id}`,
       status: 'pending' as const,
       reviewsAddressed: 0
@@ -1660,11 +1666,15 @@ If needs_setup is true (project setup required):
    *
    * CRITICAL: Each worker must create ONE specific, verifiable change.
    * This prevents merge conflicts and enables true parallelization.
+   *
+   * Returns tasks with dependency information extracted from task descriptions.
    */
   private async breakdownEMTask(em: EMState): Promise<Array<{
     worker_id: number;
     task: string;
     files: string[];
+    dependencies?: number[];
+    outputFiles?: string[];
   }>> {
     if (!this.state) throw new Error('No state');
 
@@ -1741,7 +1751,7 @@ ${isSetupEM
 
     if (!result.success) {
       console.error(`EM-${em.id} breakdown failed: ${result.stderr}`);
-      return [{ worker_id: 1, task: em.task, files: [] }];
+      return [{ worker_id: 1, task: em.task, files: [], outputFiles: [] }];
     }
 
     try {
@@ -1750,32 +1760,176 @@ ${isSetupEM
         task: string;
         files: string[];
       }>;
-      return Array.isArray(tasks) && tasks.length > 0
+
+      const rawTasks = Array.isArray(tasks) && tasks.length > 0
         ? tasks.slice(0, maxWorkersPerEm)
         : [{ worker_id: 1, task: em.task, files: [] }];
+
+      // Post-process to extract dependencies and detect file conflicts
+      return this.processWorkerDependencies(rawTasks);
     } catch {
-      return [{ worker_id: 1, task: em.task, files: [] }];
+      return [{ worker_id: 1, task: em.task, files: [], outputFiles: [] }];
     }
   }
 
   /**
-   * Start ALL workers for an EM in parallel
+   * Process worker tasks to extract dependencies and detect file-based conflicts
+   *
+   * 1. Parse explicit "Depends on Worker-X" patterns from task descriptions
+   * 2. Detect implicit dependencies when multiple workers modify the same file
+   * 3. Build a dependency graph for topological execution
+   */
+  private processWorkerDependencies(tasks: Array<{
+    worker_id: number;
+    task: string;
+    files: string[];
+  }>): Array<{
+    worker_id: number;
+    task: string;
+    files: string[];
+    dependencies?: number[];
+    outputFiles?: string[];
+  }> {
+    const result: Array<{
+      worker_id: number;
+      task: string;
+      files: string[];
+      dependencies?: number[];
+      outputFiles?: string[];
+    }> = [];
+
+    // Track which workers create/modify each file
+    const fileOwners = new Map<string, number[]>();
+
+    for (const task of tasks) {
+      const dependencies: number[] = [];
+      const outputFiles: string[] = [];
+
+      // Extract explicit dependencies from task description
+      // Pattern: "Depends on Worker-1" or "Depends on Worker-1 creating X"
+      const dependsMatch = task.task.match(/Depends on Worker-(\d+)/gi);
+      if (dependsMatch) {
+        for (const match of dependsMatch) {
+          const workerNum = match.match(/Worker-(\d+)/i)?.[1];
+          if (workerNum) {
+            const depId = parseInt(workerNum, 10);
+            if (!dependencies.includes(depId)) {
+              dependencies.push(depId);
+            }
+          }
+        }
+      }
+
+      // Extract output files from task description
+      // Look for patterns like "Output: src/db/schema.ts" or file paths
+      const outputMatch = task.task.match(/Output:([^\n]+)/gi);
+      if (outputMatch) {
+        for (const match of outputMatch) {
+          const filePath = match.replace(/Output:\s*/i, '').trim().split(/[,\s]/)[0];
+          if (filePath && filePath.length > 0 && !outputFiles.includes(filePath)) {
+            outputFiles.push(filePath);
+          }
+        }
+      }
+
+      // Also extract from the files array
+      for (const file of task.files) {
+        if (!outputFiles.includes(file)) {
+          outputFiles.push(file);
+        }
+      }
+
+      // Detect file-based dependencies: if another worker already modifies this file
+      for (const file of outputFiles) {
+        if (!fileOwners.has(file)) {
+          fileOwners.set(file, []);
+        }
+        const owners = fileOwners.get(file)!;
+
+        // If a previous worker already uses this file, add it as a dependency
+        for (const ownerId of owners) {
+          if (!dependencies.includes(ownerId)) {
+            dependencies.push(ownerId);
+            console.log(`  Worker-${task.worker_id} depends on Worker-${ownerId} (shared file: ${file})`);
+          }
+        }
+        owners.push(task.worker_id);
+      }
+
+      result.push({
+        worker_id: task.worker_id,
+        task: task.task,
+        files: task.files,
+        dependencies: dependencies.length > 0 ? dependencies : undefined,
+        outputFiles: outputFiles.length > 0 ? outputFiles : undefined
+      });
+    }
+
+    return result;
+  }
+
+  /**
+   * Start ALL workers for an EM, respecting dependency order
+   *
+   * Workers with unmet dependencies wait until their dependencies complete.
+   * Workers whose dependencies are met execute in parallel.
    */
   private async startAllWorkersForEM(em: EMState): Promise<void> {
     if (!this.state) throw new Error('No state');
 
-    const pendingWorkers = em.workers.filter(w => w.status === 'pending');
-    if (pendingWorkers.length === 0) {
-      await this.createEMPullRequest(em);
-      return;
+    let iteration = 0;
+    const maxIterations = 100; // Prevent infinite loops
+
+    while (iteration < maxIterations) {
+      iteration++;
+
+      // Find workers whose dependencies are met
+      const readyWorkers = em.workers.filter(w => {
+        if (w.status !== 'pending') return false;
+
+        // Check if all dependencies are complete (merged or skipped)
+        if (w.dependencies && w.dependencies.length > 0) {
+          const allDepsMet = w.dependencies.every(depId => {
+            const depWorker = em.workers.find(w => w.id === depId);
+            return depWorker && (depWorker.status === 'merged' || depWorker.status === 'skipped');
+          });
+          if (!allDepsMet) {
+            console.log(`  Worker-${w.id} waiting for dependencies: ${w.dependencies.join(', ')}`);
+            return false;
+          }
+        }
+
+        return true;
+      });
+
+      if (readyWorkers.length === 0) {
+        // No more workers ready - check if we're done
+        const stillPending = em.workers.filter(w => w.status === 'pending');
+        if (stillPending.length > 0) {
+          // Workers are still pending but none are ready - likely circular dependency
+          console.error(`  Deadlock detected! Workers pending but none ready: ${stillPending.map(w => w.id).join(', ')}`);
+          for (const w of stillPending) {
+            w.status = 'failed';
+            w.error = 'Circular dependency or deadlock - could not resolve dependencies';
+            addErrorToHistory(this.state, `Worker-${w.id} failed: Deadlock`, `EM-${em.id}`);
+          }
+        }
+        break;
+      }
+
+      console.log(`\n  Batch ${iteration}: Starting ${readyWorkers.length} workers in parallel for EM-${em.id}`);
+      for (const w of readyWorkers) {
+        console.log(`    - Worker-${w.id}: ${w.task.substring(0, 40)}...`);
+      }
+
+      // Execute ready workers in parallel
+      await Promise.all(readyWorkers.map(worker => this.executeSingleWorker(em, worker)));
+
+      // Save state after batch completes
+      await saveState(this.state);
     }
 
-    console.log(`  Starting ${pendingWorkers.length} workers in parallel for EM-${em.id}`);
-
-    // Start all workers in parallel
-    await Promise.all(pendingWorkers.map(worker => this.executeSingleWorker(em, worker)));
-
-    // After all workers complete, create EM PR
+    // After all workers complete (or fail), create EM PR
     await this.createEMPullRequest(em);
   }
 
@@ -1808,14 +1962,30 @@ ${isSetupEM
 
       // The SDK runner commits changes - we need to push to the worker branch
       // For parallel execution, we use GitHub API to create PR directly
-      
+
       // Create worker PR
-      const pr = await this.github.createPullRequest({
-        title: `[EM-${em.id}/W-${worker.id}] ${worker.task.substring(0, 60)}`,
-        body: `## Worker Implementation\n\n**Task:** ${worker.task}\n\n---\n*Automated by Claude Code Orchestrator*`,
-        head: worker.branch,
-        base: em.branch
-      });
+      let pr;
+      try {
+        pr = await this.github.createPullRequest({
+          title: `[EM-${em.id}/W-${worker.id}] ${worker.task.substring(0, 60)}`,
+          body: `## Worker Implementation\n\n**Task:** ${worker.task}\n\n**Dependencies:** ${worker.dependencies?.join(', ') || 'None'}\n**Output Files:** ${worker.outputFiles?.join(', ') || 'Any'}\n\n---\n*Automated by Claude Code Orchestrator*`,
+          head: worker.branch,
+          base: em.branch
+        });
+      } catch (prError) {
+        const errorMsg = (prError as Error).message;
+        // Check for "No commits between" error - means worker produced no unique changes
+        if (errorMsg.includes('No commits between') || errorMsg.includes('Validation Failed') || errorMsg.includes('pull request already exists')) {
+          console.log(`Worker-${worker.id} has no unique commits compared to base branch`);
+          console.log(`  Dependencies: ${worker.dependencies?.join(', ') || 'None'}`);
+          console.log(`  Output files: ${worker.outputFiles?.join(', ') || 'Any'}`);
+          console.log(`  Possible causes: Worker created same changes as previous worker, or worker failed to create new changes`);
+          worker.status = 'skipped';
+          worker.error = 'No unique commits - changes already in base branch';
+          return;
+        }
+        throw prError; // Re-throw other errors
+      }
 
       // Add labels to PR
       await this.github.setPRLabels(
@@ -1834,17 +2004,11 @@ ${isSetupEM
 
     } catch (error) {
       const errorMsg = (error as Error).message;
-      
-      if (errorMsg.includes('No commits between') || errorMsg.includes('Validation Failed')) {
-        console.log(`Worker-${worker.id} skipped: no unique commits`);
-        worker.status = 'skipped';
-        worker.error = 'No unique commits';
-      } else {
-        console.error(`Worker-${worker.id} failed: ${errorMsg}`);
-        worker.status = 'failed';
-        worker.error = errorMsg;
-        addErrorToHistory(this.state, `Worker-${worker.id} failed: ${errorMsg}`, `EM-${em.id}`);
-      }
+
+      console.error(`Worker-${worker.id} failed: ${errorMsg}`);
+      worker.status = 'failed';
+      worker.error = errorMsg;
+      addErrorToHistory(this.state, `Worker-${worker.id} failed: ${errorMsg}`, `EM-${em.id}`);
     }
 
     await this.updateProgressComment();

@@ -47,6 +47,16 @@ export interface WorkerState {
   files: string[];
   branch: string;
   status: WorkerStatus;
+  /**
+   * List of worker IDs that this worker depends on.
+   * These workers must complete (merged or skipped) before this worker can start.
+   */
+  dependencies?: number[];
+  /**
+   * Files this worker creates or modifies.
+   * Used for automatic dependency detection when multiple workers touch the same file.
+   */
+  outputFiles?: string[];
   prNumber?: number;
   prUrl?: string;
   reviewsAddressed: number;
