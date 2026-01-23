@@ -1566,6 +1566,33 @@ Your task is PROJECT SETUP only. DO NOT create ANY implementation code:
 - DO NOT create any files in subdirectories (no src/, no lib/, no components/, nothing)
 - The Data Layer EM will create the src/ directory and all implementation files
 ` : '';
+        const fileOwnershipWarning = worker.files && worker.files.length > 0 ? `
+
+🔴 **CRITICAL: STRICT FILE OWNERSHIP** 🔴
+You are assigned SPECIFIC files that ONLY YOU can create or modify:
+${worker.files.map(f => `  - ${f}`).join('\n')}
+
+**YOU MUST:**
+- Create ONLY the files listed above
+- Create ALL the files listed above
+- Do NOT create ANY other files (not even if they seem related)
+
+**OTHER WORKERS WILL CREATE:**
+- All other files needed for the project
+- Configuration files not in your list
+- Related components, utilities, types, etc.
+
+**If you create files NOT in your list:**
+- You WILL cause merge conflicts
+- Other workers WILL be skipped
+- The entire orchestration WILL FAIL
+- Your work WILL be wasted
+
+**Examples:**
+- If assigned "package.json" → ONLY create package.json (not tsconfig.json, not .gitignore)
+- If assigned "src/db/schema.ts" → ONLY create schema.ts (not src/lib/db.ts, not types)
+- If assigned "src/components/Button.tsx" → ONLY create Button.tsx (not Input.tsx, not Form.tsx)
+` : '';
         const atomicWarning = !isSetupWorker ? `
 
 🎯 **ATOMIC TASK - SINGLE OUTPUT FOCUS** 🎯
@@ -1583,7 +1610,7 @@ Many workers have failed by only creating skeleton files. YOU WILL BE EVALUATED 
 2. Creating WORKING features with actual logic
 3. Including proper error handling, validation, and edge cases
 4. Writing PRODUCTION-QUALITY code, not placeholder stubs
-${setupWarning}${atomicWarning}
+${setupWarning}${fileOwnershipWarning}${atomicWarning}
 **Your Task:** ${worker.task}
 
 **Files to work with:** ${worker.files?.length ? worker.files.join(', ') : 'Create whatever files are needed'}
@@ -1610,7 +1637,7 @@ ${this.state?.issue.body || ''}
 - Empty skeleton files with no actual implementation
 - Files with just "export const xyz = () => TODO" or similar placeholders
 - Type-only files with no actual logic implementation
-- Additional files beyond what your task specifies (let other workers handle those)
+- Files that are NOT in your assigned list (this causes merge conflicts!)
 
 **Example of GOOD implementation:**
 - A React component with full JSX, props, hooks, event handlers, and styling
@@ -1624,6 +1651,7 @@ ${this.state?.issue.body || ''}
 - Type-only files with no actual logic
 - Files with placeholder comments like "// TODO: implement this"
 - Creating 10 related files when your task only asks for ONE (scope creep)
+- Creating files that OTHER WORKERS are assigned (causes merge conflicts!)
 
 Implement this task now with COMPLETE, PRODUCTION-READY code. Every file must have actual working code.`;
     }
